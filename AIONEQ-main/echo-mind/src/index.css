@@ -1,0 +1,82 @@
+:root {
+  /* Palette — warm white & orange */
+  --primary: #ea580c;
+  --primary-deep: #c2410c;
+  --secondary: #fb923c;
+  --accent: #f97316;
+  --amber: #fbbf24;
+  --bg: #ffffff;
+  --bg-alt: #fff7ed;
+  --bg-warm: #fff1e6;
+  --surface: #ffffff;
+  --text-primary: #1f2937;
+  --text-muted: #6b7280;
+  --teal: #0d9488;
+  --border: #fde3cd;
+  --accent-bg: rgba(249, 115, 22, 0.1);
+  --accent-border: rgba(234, 88, 12, 0.35);
+  --shadow: rgba(194, 65, 12, 0.08) 0 12px 32px -12px;
+  --shadow-soft: rgba(249, 115, 22, 0.14) 0 20px 50px -20px;
+
+  /* Fonts */
+  --font-heading: 'Sora', system-ui, 'Segoe UI', sans-serif;
+  --font-body: 'Inter', system-ui, 'Segoe UI', sans-serif;
+  --font-accent: 'Lora', Georgia, serif;
+
+  font: 16px/1.6 var(--font-body);
+  color-scheme: light;
+  color: var(--text-primary);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text-primary);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+button {
+  font-family: inherit;
+}

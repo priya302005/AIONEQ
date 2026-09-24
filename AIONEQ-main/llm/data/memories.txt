@@ -1,0 +1,4 @@
+I live in a quiet neighborhood with my family.
+Today I worked on my AIONEQ project and learned about training neural networks.
+My favorite thing to do on weekends is take a long walk early in the morning.
+I am trying to build a tiny language model that understands my own words.
