@@ -17,17 +17,42 @@ create table if not exists public.memories (
 );
 
 -- ---- search vector for keyword retrieval (MVP: swap for embeddings later) ----
--- Note: the text search config must be cast to regconfig explicitly; without
--- the cast, recent Postgres versions reject the generated expression as not
--- immutable (42P17).
-alter table public.memories add column if not exists search_vector tsvector
-  generated always as (
-    to_tsvector('english'::regconfig,
-      coalesce(title, '') || ' ' ||
-      coalesce(content, '') || ' ' ||
-      coalesce(array_to_string(tags, ' '), '')
-    )
-  ) stored;
+-- Postgres rejects to_tsvector() inside a STORED generated column as "not
+-- immutable" (42P17) on many Supabase/PG versions, even with the regconfig
+-- cast or an IMMUTABLE wrapper. A trigger-maintained column sidesteps the
+-- immutability check entirely and works on every PG version. The column is
+-- still a plain tsvector, so the GIN index and .textSearch() calls are
+-- unchanged.
+alter table public.memories drop column if exists search_vector;
+alter table public.memories add column search_vector tsvector;
+
+create or replace function public.set_memories_search_vector()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.search_vector := to_tsvector('english'::regconfig,
+    coalesce(new.title, '') || ' ' ||
+    coalesce(new.content, '') || ' ' ||
+    coalesce(array_to_string(new.tags, ' '), ''));
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_memories_search_vector on public.memories;
+create trigger trg_memories_search_vector
+  before insert or update of title, content, tags on public.memories
+  for each row execute function public.set_memories_search_vector();
+
+-- Backfill any rows created before the trigger existed (idempotent).
+update public.memories
+  set search_vector = to_tsvector('english'::regconfig,
+    coalesce(title, '') || ' ' ||
+    coalesce(content, '') || ' ' ||
+    coalesce(array_to_string(tags, ' '), ''));
+
+create index if not exists memories_search_vector_idx
+  on public.memories using gin (search_vector);
 
 create index if not exists memories_search_vector_idx
   on public.memories using gin (search_vector);

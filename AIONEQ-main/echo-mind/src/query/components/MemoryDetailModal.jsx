@@ -1,5 +1,6 @@
+import { useEffect } from 'react'
 import { getMemoryType } from '../../memoryTypes.jsx'
-import { absoluteFileUrl } from '../../backendUrl.js'
+import { useSignedFileUrl } from '../../hooks/useSignedFileUrl.js'
 
 const TYPE_LABELS = { voice: 'Voice', journal: 'Journal', email: 'Email', document: 'Document', story: 'Story' }
 
@@ -11,7 +12,18 @@ function formatDate(value) {
 }
 
 function MemoryDetailModal({ memory, onClose }) {
+  // Hooks must be called unconditionally - useSignedFileUrl handles null memory.
+  const { url: fileUrl, error: fileError } = useSignedFileUrl(memory)
+
+  // Close on Escape.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   if (!memory) return null
+
   const config = getMemoryType(memory.type)
   const Icon = config?.Icon
   const body = memory.transcript || memory.content
@@ -34,16 +46,18 @@ function MemoryDetailModal({ memory, onClose }) {
 
         {body && <div className="memory-detail-content">{body}</div>}
 
-        {memory.file_url && (
+        {memory.file_url && fileUrl ? (
           <a
             className="memory-detail-file"
-            href={absoluteFileUrl(memory.file_url)}
+            href={fileUrl}
             target="_blank"
             rel="noreferrer"
           >
             Open attached file
           </a>
-        )}
+        ) : memory.file_url && fileError ? (
+          <p className="modal-sub" role="alert">Unable to load file: {fileError}</p>
+        ) : null}
       </div>
     </div>
   )

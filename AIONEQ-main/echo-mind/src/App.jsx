@@ -11,10 +11,13 @@ import Dashboard from './pages/Dashboard.jsx'
 import UploadPage from './pages/UploadPage.jsx'
 import Ask from './pages/Ask.jsx'
 import MemoryDetail from './pages/MemoryDetail.jsx'
+import SecuritySettings from './pages/SecuritySettings.jsx'
+import LegacyAccess from './pages/LegacyAccess.jsx'
 import RequireAuth from './components/RequireAuth.jsx'
 import { AuthProvider, useAuth } from './auth'
 import { ToastProvider, useToast } from './toast'
 import { supabase } from './supabaseClient'
+import { useSessionTimeout } from './hooks/useSessionTimeout.js'
 
 function useRevealOnScroll(dep) {
   useEffect(() => {
@@ -52,6 +55,22 @@ function Shell() {
   const location = useLocation()
   const { user } = useAuth()
   const { notify } = useToast()
+
+  // Idle session timeout: sign out after inactivity (defense against an
+  // unattended device holding an open session to a legacy vault).
+  useSessionTimeout(async () => {
+    await supabase.auth.signOut().catch(() => {})
+    notify('Signed out due to inactivity.')
+    navigate('/login', { replace: true, state: { reason: 'Signed out due to inactivity.' } })
+  }, Boolean(user))
+
+  const loginReason = location.state?.reason
+  useEffect(() => {
+    if (loginReason) {
+      notify(loginReason)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useRevealOnScroll(location.pathname)
 
@@ -108,6 +127,7 @@ function Shell() {
                   <span className="nav-avatar">{avatarText}</span>
                   <span className="nav-username">{displayName || 'Account'}</span>
                 </span>
+                <button type="button" className="btn-ghost" onClick={() => navigate('/security')}>Security</button>
                 <button type="button" className="btn-ghost" onClick={logout}>Log Out</button>
               </>
             ) : (
@@ -148,6 +168,14 @@ function Shell() {
         <Route
           path="/dashboard/memories/:id"
           element={<RequireAuth><MemoryDetail /></RequireAuth>}
+        />
+        <Route
+          path="/dashboard/legacy-access"
+          element={<RequireAuth><LegacyAccess /></RequireAuth>}
+        />
+        <Route
+          path="/security"
+          element={<RequireAuth><SecuritySettings /></RequireAuth>}
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

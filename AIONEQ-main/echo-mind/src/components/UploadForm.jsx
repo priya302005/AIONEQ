@@ -14,6 +14,27 @@ const ACCEPT = {
   document: '.pdf,.doc,.docx,.xls,.xlsx,.rtf,.txt,.md,.csv',
 }
 
+const MAX_FILE_BYTES = 25 * 1024 * 1024
+const EXTENSIONS = {
+  voice: ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'webm', 'mp4', 'oga'],
+  document: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'rtf', 'txt', 'md', 'csv'],
+}
+
+/**
+ * Client-side size/type gate (UX guard only - the backend performs the real
+ * validation, including content sniffing and quota checks).
+ * Returns an error message or '' if acceptable.
+ */
+export function validateFileClient(candidate, type) {
+  if (!candidate) return 'Please choose a file.'
+  if (candidate.size > MAX_FILE_BYTES) return 'File is too large. The maximum size is 25MB.'
+  const ext = (candidate.name.split('.').pop() || '').toLowerCase()
+  const allowed = EXTENSIONS[type] || []
+  const mimeOk = type === 'voice' ? String(candidate.type || '').startsWith('audio/') : true
+  if (!allowed.includes(ext) && !mimeOk) return 'Unsupported file type.'
+  return ''
+}
+
 function formatFileSize(bytes) {
   if (!bytes) return ''
   if (bytes < 1024) return `${bytes} B`
@@ -23,6 +44,21 @@ function formatFileSize(bytes) {
 
 function Dropzone({ memoryType, file, setFile }) {
   const [dragging, setDragging] = useState(false)
+  const [reject, setReject] = useState('')
+
+  // Client-side checks are UX only - the backend independently re-validates
+  // magic bytes, size, and quota (never trust the client).
+  const pick = (candidate) => {
+    const err = validateFileClient(candidate, memoryType.type)
+    if (err) {
+      setReject(err)
+      setFile(null)
+      return
+    }
+    setReject('')
+    setFile(candidate)
+  }
+
   return (
     <label
       className={`dropzone ${dragging ? 'dragging' : ''} ${file ? 'has-file' : ''}`}
@@ -31,14 +67,15 @@ function Dropzone({ memoryType, file, setFile }) {
       onDrop={(e) => {
         e.preventDefault()
         setDragging(false)
-        if (e.dataTransfer.files?.[0]) setFile(e.dataTransfer.files[0])
+        if (e.dataTransfer.files?.[0]) pick(e.dataTransfer.files[0])
       }}
     >
       <input
         type="file"
         accept={ACCEPT[memoryType.type]}
-        onChange={(e) => setFile(e.target.files?.[0] || null)}
+        onChange={(e) => pick(e.target.files?.[0] || null)}
       />
+      {reject && <span className="dropzone-sub" role="alert" style={{ color: 'var(--danger, #b3372e)' }}>{reject}</span>}
       {file ? (
         <>
           <span className="dropzone-file">{file.name}</span>
@@ -90,6 +127,13 @@ function UploadForm({ memoryType, onSaved }) {
     if (!title.trim()) {
       setBanner({ type: 'error', message: 'Please add a title for this memory.' })
       return
+    }
+    if (memoryType.fileBased && !(isVoice && mode === 'record')) {
+      const err = validateFileClient(file, memoryType.type)
+      if (err) {
+        setBanner({ type: 'error', message: err })
+        return
+      }
     }
     setLoading(true)
     try {

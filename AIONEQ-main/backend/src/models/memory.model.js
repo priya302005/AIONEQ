@@ -57,6 +57,17 @@ export async function updateMemoryRow(token, id, payload) {
   )
 }
 
+export async function updateMemoryMetadata(token, id, payload) {
+  return withErrorCapture(
+    clientFor(token)
+      .from('memories')
+      .update(payload)
+      .eq('id', id)
+      .select()
+      .maybeSingle()
+  )
+}
+
 export async function removeMemoryRow(token, id) {
   return withErrorCapture(
     clientFor(token)
@@ -66,4 +77,9 @@ export async function removeMemoryRow(token, id) {
       .select()
       .maybeSingle()
   )
+}
+
+/** Bulk-wipe used by account deletion. RLS still scopes these to the owner. */
+export async function removeAllMemoriesForUser(token) {
+  return clientFor(token).from('memories').delete().select('file_url')
 }

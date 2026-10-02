@@ -3,8 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import { getMemoryType } from '../memoryTypes.jsx'
 import { useToast } from '../toast'
-import { absoluteFileUrl } from '../backendUrl.js'
 import { formatDuration, formatFullDate, formatMemoryDate, formatRelativeTime } from '../formatRelativeTime.js'
+import { useSignedFileUrl } from '../hooks/useSignedFileUrl.js'
 import MemoryCardMenu from '../components/MemoryCardMenu.jsx'
 import EditableField from '../components/EditableField.jsx'
 import ConfirmDeleteModal from '../components/ConfirmDeleteModal.jsx'
@@ -30,6 +30,9 @@ function MemoryDetail() {
   const [contentDraft, setContentDraft] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
+
+  // Hooks must stay above the early returns (rules of hooks). Handles null memory.
+  const { url: fileUrl, error: fileError } = useSignedFileUrl(memory)
 
   useEffect(() => {
     let cancelled = false
@@ -109,7 +112,6 @@ function MemoryDetail() {
   }
 
   const config = getMemoryType(memory.type)
-  const fileUrl = absoluteFileUrl(memory.file_url)
   const created = memory.created_at
   const updated = memory.updated_at
   const canShowEdited = updated && created && new Date(updated).getTime() > new Date(created).getTime()
@@ -180,14 +182,18 @@ function MemoryDetail() {
                 <span className="voice-duration">{formatDuration(memory.duration)}</span>
               )}
             </div>
+          ) : memory.type === 'voice' && fileError ? (
+            <div className="auth-banner error" role="alert">Could not load the audio file: {fileError}</div>
           ) : null}
 
           {!editableText ? (
             <div className="memory-detail-file-block">
-              {memory.type === 'document' ? (
+              {memory.type === 'document' && fileUrl ? (
                 <a className="memory-detail-file" href={fileUrl} target="_blank" rel="noreferrer">
                   Open document{mimeLabel(memory.mime_type) ? ` (${mimeLabel(memory.mime_type)})` : ''}
                 </a>
+              ) : memory.type === 'document' && fileError ? (
+                <div className="auth-banner error" role="alert">Could not load the document: {fileError}</div>
               ) : (
                 <span className="md-muted">No text content yet.</span>
               )}

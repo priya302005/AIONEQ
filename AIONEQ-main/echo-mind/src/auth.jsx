@@ -8,14 +8,36 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setUser(data.session?.user ?? null)
-      setLoading(false)
-    })
+    let cancelled = false
+
+    async function verify() {
+      try {
+        // Verify against Supabase (server-side token check) - fail closed:
+        // any error or missing session clears the user.
+        const { data, error } = await supabase.auth.getUser()
+        if (cancelled) return
+        if (error || !data.user) {
+          setUser(null)
+        } else {
+          setUser(data.user)
+        }
+      } catch {
+        if (!cancelled) setUser(null)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    verify()
+
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null)
     })
-    return () => sub.subscription.unsubscribe()
+
+    return () => {
+      cancelled = true
+      sub.subscription.unsubscribe()
+    }
   }, [])
 
   return <AuthContext.Provider value={{ user, loading }}>{children}</AuthContext.Provider>

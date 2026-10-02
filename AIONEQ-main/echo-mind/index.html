@@ -15,6 +15,19 @@
       rel="stylesheet"
     />
     <title>EchoMind — Your Memories. Your Mind. Preserved Forever.</title>
+    <!--
+      Content Security Policy (defense in depth).
+      - 'unsafe-inline' is limited to style-src: React renders style="" attributes
+        (allowed via style-src, not script-src).
+      - https: in connect/media/img allows the Supabase API + storage (URL is a
+        build-time secret, so the exact origin cannot be listed here).
+      - script-src is strict ('self'); Vite dev re-adds 'unsafe-inline' for the
+        react-refresh preamble via the CSP plugin in vite.config.js.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; frame-src 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: https: http://localhost:4000; connect-src 'self' ws://localhost:5173 wss: https: http://localhost:4000;"
+    />
   </head>
   <body>
     <div id="root"></div>

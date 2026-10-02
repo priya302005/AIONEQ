@@ -19,7 +19,7 @@ async function withErrorCapture(promise) {
 export async function listConversations(token) {
   return clientFor(token)
     .from('conversations')
-    .select('id,title,updated_at')
+    .select('id,title,updated_at,user_id')
     .order('updated_at', { ascending: false })
 }
 
@@ -74,4 +74,9 @@ export async function renameConversationRow(token, id, title) {
       .select()
       .maybeSingle()
   )
+}
+
+/** Bulk-wipe used by account deletion. */
+export async function removeAllConversationsForUser(token) {
+  return clientFor(token).from('conversations').delete()
 }

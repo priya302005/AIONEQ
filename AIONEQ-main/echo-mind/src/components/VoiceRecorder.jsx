@@ -41,6 +41,21 @@ function VoiceRecorder({ onRecordingComplete, onTranscriptChange, transcript }) 
   const [playing, setPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
 
+  // Revoke the preview blob URL when unmounting so recorded audio does not
+  // linger in browser memory (defense against data leaks).
+  const recordingUrlRef = useRef(null)
+  useEffect(() => {
+    recordingUrlRef.current = recording?.url || null
+  }, [recording])
+  useEffect(() => {
+    const url = recordingUrlRef.current
+    return () => {
+      if (url) URL.revokeObjectURL(url)
+    }
+    // unmount only - empty deps intentionally
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const cleanupStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
