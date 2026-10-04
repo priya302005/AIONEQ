@@ -6,9 +6,16 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "test": "node --test tests/*.test.mjs",
+    "test": "node --experimental-test-module-mocks --test tests/*.test.mjs",
     "test:unit": "node --test tests/unit.test.mjs",
-    "test:isolation": "node --test tests/isolation.test.mjs"
+    "test:isolation": "node --test tests/isolation.test.mjs",
+    "test:isolation:live": "node scripts/runIsolationLive.mjs",
+    "smoke": "node scripts/smokeTest.mjs",
+    "eval": "node eval/runRetrievalEval.mjs",
+    "eval:grounding": "node --experimental-test-module-mocks eval/groundingEval.mjs",
+    "eval:perf": "node --experimental-test-module-mocks eval/perfEval.mjs",
+    "reindex:vectors": "node scripts/reindexVectors.mjs",
+    "reindex:check": "node scripts/reindexVectors.mjs --check"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.115.0",

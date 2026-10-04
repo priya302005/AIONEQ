@@ -10,9 +10,11 @@ import {
 import {
   createMemory,
   findMemories,
+  listMemories,
   findMemoryById,
   updateMemoryRow,
   removeMemoryRow,
+  resetDerived,
 } from '../models/memory.model.js'
 import { assertMemoryOwnership } from '../utils/assertOwnership.js'
 import { grantFor } from '../models/legacy.model.js'
@@ -23,7 +25,11 @@ import { scanFile } from '../middleware/scan.middleware.js'
 import { assertQuota } from '../utils/quota.js'
 import { issueFileToken, verifyFileToken } from '../utils/fileSigning.js'
 import { audit } from '../utils/audit.js'
-import { enrichMemory } from '../utils/enrichMemory.js'
+import { queueProcessing, reprocessMemory, describeStatus } from '../services/memoryIngestion.js'
+import { purgeDerived } from '../services/memoryPipeline.js'
+import { searchMemories } from '../services/memorySearch.js'
+import { linksForMemory } from '../models/memoryLink.model.js'
+import { config } from '../config/config.js'
 
 const notFound = (res) => res.status(404).json({ success: false, message: 'Memory not found.' })
 
@@ -55,7 +61,7 @@ function deleteUploadedFileByName(filename) {
 }
 
 export const createMemoryController = asyncHandler(async (req, res) => {
-  const { type, title, content, tags, eventDate, duration } = req.body // zod-validated
+  const { type, title, content, transcript, tags, eventDate, duration } = req.body // zod-validated
 
   if (!type || !MEMORY_TYPES.includes(type)) {
     return res.status(400).json({ success: false, message: 'Invalid or missing memory type.' })
@@ -71,6 +77,14 @@ export const createMemoryController = asyncHandler(async (req, res) => {
     tags: parseTags(tags),
     event_date: eventDate || new Date().toISOString(),
     content: '',
+    processing_status: 'pending',
+  }
+
+  // A transcript the user supplies is text they wrote or confirmed, so it goes
+  // in the transcript column - never over the top of their content.
+  if (transcript && String(transcript).trim()) {
+    payload.transcript = String(transcript).trim()
+    payload.source_kind = 'transcribed'
   }
 
   if (TEXT_MEMORY_TYPES.includes(type)) {
@@ -99,12 +113,26 @@ export const createMemoryController = asyncHandler(async (req, res) => {
       return res.status(413).json({ success: false, message: quota.message })
     }
 
-    // 3. Malware scan (no-op unless SCAN_COMMAND is configured).
+    // 3. Malware scan. Fails closed: a configured scanner that
+    //    finds a threat OR fails to run rejects the upload, and in
+    //    production (or REQUIRE_UPLOAD_SCAN=true) an upload with no
+    //    scanner at all is rejected too - an unscanned upload is
+    //    never treated as clean. Development/test skip the scan
+    //    (audited) so the flow stays usable.
     const scan = await scanFile(req.file.path, { userId: req.user.id, ip: req.ip })
     if (!scan.clean) {
       deleteUploadedFileByName(req.file.filename)
-      audit({ action: 'upload.scan_rejected', userId: req.user.id, ip: req.ip, detail: { type } })
-      return res.status(400).json({ success: false, message: 'Upload rejected by malware scan.' })
+      if (scan.enabled) {
+        audit({ action: 'upload.scan_threat_or_failure', userId: req.user.id, ip: req.ip, detail: { type } })
+        return res.status(400).json({ success: false, message: 'Upload rejected by malware scan.' })
+      }
+      audit({ action: 'upload.scan_unavailable', userId: req.user.id, ip: req.ip, detail: { type } })
+      return res.status(503).json({
+        success: false,
+        message:
+          'Upload scanning is required but no scanner is configured. ' +
+          'The upload was rejected and not stored. Contact the administrator.',
+      })
     }
 
     payload.file_url = `/uploads/${req.file.filename}`
@@ -113,6 +141,11 @@ export const createMemoryController = asyncHandler(async (req, res) => {
     if (type === 'voice') {
       const seconds = parseDuration(duration)
       if (seconds) payload.duration = seconds
+      // No transcript yet: the pipeline will try the transcription service and
+      // fall back to 'partial' with a clear reason if none is configured.
+      if (!payload.transcript) payload.source_kind = 'audio'
+    } else if (type === 'document') {
+      payload.source_kind = 'document'
     }
     if (content && String(content).trim()) {
       payload.content = String(content).trim()
@@ -128,25 +161,64 @@ export const createMemoryController = asyncHandler(async (req, res) => {
 
   audit({ action: 'memory.create', userId: req.user.id, ip: req.ip, detail: { memoryId: data?.id, type } })
 
-  // Best-effort metadata enrichment (keywords/entities/summary). Fire-and-forget:
-  // the save response is never blocked or failed by a local-AI hiccup, and the
-  // original user content is never modified.
-  if (data && (data.content || data.title)) {
-    enrichMemory(req.accessToken, data).catch(() => {})
-  }
+  // Queue the understanding pipeline. Fire-and-forget by design: transcription,
+  // document extraction, summarisation and indexing must never delay or fail
+  // the save. The memory is already stored and fully usable at this point.
+  const queued = await queueProcessing(req.accessToken, data, { reason: 'created' }).catch(() => ({ queued: false }))
 
-  res.status(201).json({ success: true, message: 'Memory saved.', data })
+  res.status(201).json({
+    success: true,
+    message: 'Memory saved.',
+    data,
+    processing: { queued: Boolean(queued?.queued), reason: queued?.reason || null },
+  })
 })
 
+/**
+ * Lists the caller's memories, paged and filtered.
+ *
+ * With `q` this is hybrid search (semantic + full-text + lexical); without it
+ * it is a plain paged listing. Always bounded - the dashboard can never pull an
+ * unbounded archive into the browser.
+ */
 export const getMemoriesController = asyncHandler(async (req, res) => {
-  const { type, sort } = req.query // validated by zod (query schema)
-  const { data, error } = await findMemories(req.accessToken, { type, sort })
+  const { type, status, q, limit, offset, sort } = req.query // zod-validated
+
+  if (q) {
+    const results = await searchMemories(req.accessToken, req.user.id, q, {
+      type: type || null,
+      limit: Math.min(limit || config.memorySearchMaxLimit, config.memorySearchMaxLimit),
+    })
+    return res.json({
+      success: true,
+      message: results.length ? 'Memories found.' : 'No saved memories match that.',
+      data: results,
+      total: results.length,
+    })
+  }
+
+  const effectiveLimit = Math.min(limit || config.memoryListDefaultLimit, config.memoryListMaxLimit)
+  const { data, error, count } = await listMemories(req.accessToken, {
+    type,
+    status,
+    limit: effectiveLimit,
+    offset: offset || 0,
+    sort: sort || '-created_at',
+  })
 
   if (error) {
     return res.status(400).json({ success: false, message: missingTableHint(error.message) })
   }
 
-  res.json({ success: true, message: 'Memories fetched.', data: data || [] })
+  res.json({
+    success: true,
+    message: 'Memories fetched.',
+    data: data || [],
+    // Exact total when PostgREST supplies it, otherwise "there may be more".
+    total: typeof count === 'number' ? count : null,
+    limit: effectiveLimit,
+    offset: offset || 0,
+  })
 })
 
 export const getMemoryByIdController = asyncHandler(async (req, res) => {
@@ -159,12 +231,52 @@ export const getMemoryByIdController = asyncHandler(async (req, res) => {
   }
   if (!data) return notFound(res)
 
-  res.json({ success: true, message: 'Memory fetched.', data })
+  // Relationship proposals found for this memory. Read-only here; the user
+  // resolves them through PATCH /api/memory-links/:id. Purely informational.
+  const links = await linksForMemory(req.accessToken, id).catch(() => [])
+
+  res.json({ success: true, message: 'Memory fetched.', data, links, processing: describeStatus(data) })
+})
+
+/**
+ * Re-runs the understanding pipeline for one memory. Used after an edit and to
+ * retry a memory whose processing failed.
+ */
+export const reprocessMemoryController = asyncHandler(async (req, res) => {
+  const { id } = req.params
+
+  const existing = await findMemoryById(req.accessToken, id)
+  if (existing.error) return res.status(400).json({ success: false, message: existing.error.message })
+  if (!existing.data) return notFound(res)
+  assertMemoryOwnership(existing.data, req.user.id)
+
+  // Clear derived state first so a failed retry cannot leave stale metadata
+  // behind that looks current.
+  await resetDerived(req.accessToken, id).catch(() => {})
+
+  const result = await reprocessMemory(req.accessToken, id)
+  if (!result.ok && result.status !== 'partial') {
+    return res.status(200).json({
+      success: false,
+      message: result.reason || 'This memory could not be processed.',
+      processing: { status: result.status || 'failed', notes: result.notes || [] },
+    })
+  }
+
+  audit({ action: 'memory.reprocess', userId: req.user.id, ip: req.ip, detail: { memoryId: id, status: result.status } })
+
+  const refreshed = await findMemoryById(req.accessToken, id)
+  res.json({
+    success: true,
+    message: 'Memory reprocessed.',
+    data: refreshed.data,
+    processing: describeStatus(refreshed.data),
+  })
 })
 
 export const updateMemoryController = asyncHandler(async (req, res) => {
   const { id } = req.params
-  const { title, content, tags, eventDate } = req.body // zod-validated
+  const { title, content, transcript, tags, eventDate } = req.body // zod-validated
 
   const existing = await findMemoryById(req.accessToken, id)
   if (existing.error) {
@@ -176,11 +288,26 @@ export const updateMemoryController = asyncHandler(async (req, res) => {
   const payload = {}
   if (title !== undefined && String(title).trim()) payload.title = String(title).trim()
   if (content !== undefined) payload.content = String(content)
+  if (transcript !== undefined) {
+    payload.transcript = String(transcript)
+    payload.source_kind = String(transcript).trim() ? 'transcribed' : existing.data.source_kind
+  }
   if (tags !== undefined) payload.tags = parseTags(tags)
   if (eventDate !== undefined) payload.event_date = eventDate
 
   if (!Object.keys(payload).length) {
     return res.status(400).json({ success: false, message: 'Nothing to update.' })
+  }
+
+  // The searchable text changed, so the derived summary/topics/embedding are now
+  // stale. Mark the memory pending and queue a fresh run; the old values are
+  // cleared so nothing incorrect is ever served in the meantime.
+  const textChanged = payload.content !== undefined || payload.transcript !== undefined
+  if (textChanged) {
+    payload.processing_status = 'pending'
+    payload.processing_stage = 'queued'
+    payload.processing_error = null
+    payload.processed_at = null
   }
 
   const { data, error } = await updateMemoryRow(req.accessToken, id, {
@@ -195,12 +322,13 @@ export const updateMemoryController = asyncHandler(async (req, res) => {
 
   audit({ action: 'memory.update', userId: req.user.id, ip: req.ip, detail: { memoryId: id } })
 
-  // Re-enrich when the content actually changed (never blocks the response).
-  if (data && payload.content !== undefined) {
-    enrichMemory(req.accessToken, data).catch(() => {})
+  // Re-process when the text actually changed. Never blocks the response, and
+  // the user's edited text is already saved either way.
+  if (textChanged) {
+    await queueProcessing(req.accessToken, data, { reason: 'updated' }).catch(() => {})
   }
 
-  res.json({ success: true, message: 'Memory updated.', data })
+  res.json({ success: true, message: 'Memory updated.', data, processing: describeStatus(data) })
 })
 
 export const deleteMemoryController = asyncHandler(async (req, res) => {
@@ -218,7 +346,15 @@ export const deleteMemoryController = asyncHandler(async (req, res) => {
   }
   if (!data) return notFound(res)
 
+  // Derived data goes with it:
+  //   - the stored file is removed from disk
+  //   - memory_vectors and memory_links rows cascade-delete via the foreign key
+  //     in memory_intelligence.sql, so no orphan vector can ever resurface this
+  //     memory in a search result
+  // The explicit vector delete is a belt-and-braces step for databases where the
+  // cascade has not been created yet.
   removeUploadedFile(existing.data.file_url)
+  await purgeDerived(req.accessToken, id).catch(() => {})
 
   audit({ action: 'memory.delete', userId: req.user.id, ip: req.ip, detail: { memoryId: id } })
   res.json({ success: true, message: 'Memory deleted.' })

@@ -1,7 +1,14 @@
+import { useState } from 'react'
 import CitationChip from './CitationChip.jsx'
+
+const TYPE_LABELS = { voice: 'Voice', journal: 'Journal', email: 'Email', document: 'Document', story: 'Story' }
 
 function MessageBubble({ message, isLast, onOpenMemory, onPickFollowUp }) {
   const isUser = message.role === 'user'
+  // Collapsed by default so the transcript stays readable; the user opens it
+  // when they want to check what an answer was based on.
+  // Declared before any early return so the hook count never changes.
+  const [showSources, setShowSources] = useState(false)
 
   if (isUser) {
     return (
@@ -17,6 +24,7 @@ function MessageBubble({ message, isLast, onOpenMemory, onPickFollowUp }) {
   const citations = message.citedMemories || []
   const noSource = citations.length === 0
   const suggestions = message.suggestions || []
+  const used = message.usedMemories || []
 
   return (
     <div className="msg-row ai">
@@ -35,6 +43,31 @@ function MessageBubble({ message, isLast, onOpenMemory, onPickFollowUp }) {
             </div>
           )}
         </div>
+
+        {used.length > 0 && (
+          <div className="msg-sources">
+            <button
+              type="button"
+              className="msg-sources-toggle"
+              onClick={() => setShowSources((v) => !v)}
+              aria-expanded={showSources}
+            >
+              {showSources ? '▾' : '▸'} Answered from {used.length} {used.length === 1 ? 'memory' : 'memories'}
+            </button>
+            {showSources && (
+              <ul className="msg-sources-list">
+                {used.map((m) => (
+                  <li key={m.memoryId}>
+                    <button type="button" onClick={() => onOpenMemory(m.memoryId)}>
+                      <span className="msg-source-title">{m.title}</span>
+                      <span className="msg-source-type">{TYPE_LABELS[m.type] || m.type}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         {isLast && suggestions.length > 0 && (
           <div className="follow-ups">

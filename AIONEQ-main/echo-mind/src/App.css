@@ -2709,3 +2709,303 @@
   font-size: 0.8rem;
   color: var(--text-muted, #6b7280);
 }
+
+/* ==== Memory intelligence: archive search + filters ==== */
+.archive-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.archive-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 280px;
+  min-width: 0;
+  padding: 0 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 50px;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+.archive-search:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+.archive-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  padding: 11px 0;
+  font-size: 14px;
+  color: var(--text-primary);
+  font-family: inherit;
+}
+.archive-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.archive-filters select {
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.archive-filters select:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+.archive-count {
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+/* ==== Processing status chips ==== */
+.memory-status {
+  padding: 3px 9px;
+  border-radius: 50px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.memory-status-pending,
+.memory-status-processing {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--primary);
+}
+.memory-status-partial {
+  background: rgba(251, 191, 36, 0.14);
+  border-color: rgba(217, 119, 6, 0.35);
+  color: #b45309;
+}
+.memory-status-failed {
+  background: rgba(179, 55, 46, 0.1);
+  border-color: rgba(179, 55, 46, 0.35);
+  color: #b3372e;
+}
+.memory-status-ready {
+  background: rgba(13, 148, 136, 0.1);
+  border-color: rgba(13, 148, 136, 0.35);
+  color: var(--teal);
+}
+
+/* ==== Derived topic chips ==== */
+.memory-item-topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+.topic-chip {
+  padding: 2px 8px;
+  border-radius: 50px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* ==== Memory detail: processing notice ==== */
+.md-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0 4px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+.md-notice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.md-notice-body strong {
+  font-size: 14px;
+}
+.md-notice-body span {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.md-notice-detail {
+  font-size: 12px;
+  opacity: 0.85;
+  word-break: break-word;
+}
+.md-notice.memory-status-partial {
+  background: rgba(251, 191, 36, 0.08);
+  border-color: rgba(217, 119, 6, 0.35);
+}
+.md-notice.memory-status-failed {
+  background: rgba(179, 55, 46, 0.06);
+  border-color: rgba(179, 55, 46, 0.3);
+}
+.md-notice.memory-status-pending,
+.md-notice.memory-status-processing {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+
+/* ==== Memory detail: relationship proposals ==== */
+.link-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.link-row.link-rejected {
+  opacity: 0.5;
+}
+.link-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+.link-relation {
+  font-size: 14px;
+  font-weight: 600;
+}
+.link-preview {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.link-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ==== Ask: which memories informed an answer ==== */
+.msg-sources {
+  margin-top: 6px;
+}
+.msg-sources-toggle {
+  border: 0;
+  background: transparent;
+  padding: 4px 2px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-family: inherit;
+}
+.msg-sources-toggle:hover {
+  color: var(--primary);
+}
+.msg-sources-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.msg-sources-list button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 7px 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.msg-sources-list button:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+.msg-source-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-source-type {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* ==== Privacy switches ==== */
+.privacy-toggle {
+  position: relative;
+  flex-shrink: 0;
+  width: 46px;
+  height: 26px;
+  border-radius: 50px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-alt);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.privacy-toggle.on {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+.privacy-toggle:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.privacy-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  transition: transform 0.15s ease;
+}
+.privacy-toggle.on .privacy-toggle-knob {
+  transform: translateX(20px);
+  background: var(--primary);
+  border-color: var(--primary);
+}

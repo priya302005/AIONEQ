@@ -76,7 +76,10 @@ export async function renameConversationRow(token, id, title) {
   )
 }
 
-/** Bulk-wipe used by account deletion. */
+/**
+ * Bulk-wipe used by account deletion. `.select('id')` makes PostgREST
+ * return the deleted rows so the caller can count what was removed.
+ */
 export async function removeAllConversationsForUser(token) {
-  return clientFor(token).from('conversations').delete()
+  return clientFor(token).from('conversations').delete().select('id')
 }

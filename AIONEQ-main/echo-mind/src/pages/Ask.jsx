@@ -125,6 +125,9 @@ function Ask() {
         role: 'assistant',
         content: res.answer,
         citedMemories: res.citedMemories || [],
+        // Every memory that informed the answer, so the chat can show what it
+        // drew on even when the model cited only some of them.
+        usedMemories: res.usedMemories || [],
         suggestions: res.suggestions || [],
         createdAt: now,
       }

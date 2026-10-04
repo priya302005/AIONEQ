@@ -1,3 +1,10 @@
 node_modules/
 .env
 *.log
+
+# Runtime upload directory. User-uploaded files must never be
+# committed: git history is outside the account-deletion
+# path and cannot be wiped by "forget my data". .gitkeep is
+# tracked explicitly to keep the directory in the repo.
+uploads/*
+!uploads/.gitkeep

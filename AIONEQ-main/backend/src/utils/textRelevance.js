@@ -45,6 +45,11 @@ export const STOPWORDS = new Set([
   'what', 'which', 'who', 'whom', 'whose',
   'don', "don't", 'doesn', "doesn't", 'didn', "didn't", 'can\'t', 'cant',
   'i\'m', 'im', 'i\'ve', 'ive', 'i\'ll', 'it\'s', 'that\'s',
+  // Frequency adverbs and filler verbs. These carry no retrieval signal but the
+  // prefix-tolerant stemmer would still match them inside ordinary words
+  // ("ever" in "every"), which inflates irrelevant memories.
+  'ever', 'never', 'always', 'often', 'sometimes', 'usually', 'still',
+  'get', 'got', 'go', 'goes', 'went', 'make', 'made', 'say', 'said',
 ])
 
 export function contentTokens(text) {
@@ -141,4 +146,16 @@ export function relevanceScore(question, parts) {
 /** Normalize a bunch of "Item" objects into a comparable text key for dedup. */
 export function textKey(text) {
   return tokenize(text).join(' ')
+}
+
+/**
+ * Collapse whitespace and cut to `max` characters on a word boundary.
+ * Shared by prompt builders so context text never blows past a token budget.
+ */
+export function truncate(text, max = 500) {
+  const value = String(text == null ? '' : text).replace(/\s+/g, ' ').trim()
+  if (value.length <= max) return value
+  const cut = value.slice(0, max)
+  const lastSpace = cut.lastIndexOf(' ')
+  return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}...`
 }

@@ -11,6 +11,23 @@ import ConfirmDeleteModal from '../components/ConfirmDeleteModal.jsx'
 
 const TYPE_LABELS = { voice: 'Voice', journal: 'Journal', email: 'Email', document: 'Document', story: 'Story' }
 
+/** Plain-language copy for each pipeline state, and whether a retry makes sense. */
+const STATUS_COPY = {
+  pending: { title: 'EchoMind is still reading this memory', body: 'It will finish in the background — you can leave this page.', retry: false },
+  processing: { title: 'EchoMind is still reading this memory', body: 'It will finish in the background — you can leave this page.', retry: false },
+  ready: { title: null, body: null, retry: false },
+  partial: { title: 'Saved, but not fully analysed', body: 'Part of the analysis could not finish. Your original content is stored exactly as you wrote it.', retry: true },
+  failed: { title: 'Analysis did not finish', body: 'Your memory is saved and readable. Only the automatic analysis failed, so Ask may know less about it.', retry: true },
+}
+
+/** Relationship labels, phrased as suggestions the user accepts or dismisses. */
+const RELATION_COPY = {
+  duplicate: 'Looks like a duplicate of',
+  follow_up: 'Looks like a follow-up to',
+  supersedes: 'Looks like it updates',
+  related: 'Related to',
+}
+
 function mimeLabel(mimeType) {
   if (!mimeType) return ''
   const part = mimeType.split('/').pop()
@@ -31,6 +48,12 @@ function MemoryDetail() {
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
+  // Pipeline state and relationship proposals, from GET /api/memories/:id
+  const [processing, setProcessing] = useState(null)
+  const [links, setLinks] = useState([])
+  const [reprocessing, setReprocessing] = useState(false)
+  const [linkBusy, setLinkBusy] = useState(null)
+
   // Hooks must stay above the early returns (rules of hooks). Handles null memory.
   const { url: fileUrl, error: fileError } = useSignedFileUrl(memory)
 
@@ -39,7 +62,11 @@ function MemoryDetail() {
     async function load() {
       try {
         const res = await api(`/api/memories/${id}`)
-        if (!cancelled) setMemory(res.data)
+        if (!cancelled) {
+          setMemory(res.data)
+          setProcessing(res.processing || null)
+          setLinks(res.links || [])
+        }
       } catch (err) {
         if (!cancelled) setLoadError(err.message)
       } finally {
@@ -55,12 +82,48 @@ function MemoryDetail() {
     try {
       const res = await api(`/api/memories/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
       setMemory(res.data)
+      // An edit invalidates the derived data, so the status goes back to pending.
+      if (res.processing) setProcessing(res.processing)
       setEditingContent(false)
       notify('Memory updated.')
     } catch (err) {
       notify(err.message, 'error')
     } finally {
       setSaving(false)
+    }
+  }
+
+  /** Re-run transcription / extraction / analysis for this memory. */
+  const reprocess = async () => {
+    setReprocessing(true)
+    try {
+      const res = await api(`/api/memories/${id}/reprocess`, { method: 'POST' })
+      setProcessing(res.processing || null)
+      notify(res.message || 'Re-analysing this memory.')
+    } catch (err) {
+      notify(err.message, 'error')
+    } finally {
+      setReprocessing(false)
+    }
+  }
+
+  /**
+   * Approve or dismiss a relationship proposal. This is the ONLY thing that
+   * makes a suggestion take effect, and dismissing simply hides it again.
+   */
+  const resolveLink = async (linkId, status) => {
+    setLinkBusy(linkId)
+    try {
+      const res = await api(`/api/memory-links/${linkId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      })
+      setLinks((prev) => prev.map((l) => (l.id === linkId ? { ...l, ...res.data } : l)))
+      notify(status === 'approved' ? 'Suggestion accepted.' : 'Suggestion dismissed.')
+    } catch (err) {
+      notify(err.message, 'error')
+    } finally {
+      setLinkBusy(null)
     }
   }
 
@@ -117,6 +180,11 @@ function MemoryDetail() {
   const canShowEdited = updated && created && new Date(updated).getTime() > new Date(created).getTime()
   const editableText = Boolean(memory.content?.trim())
 
+  const topics = Array.isArray(memory.topics) ? memory.topics : []
+  const statusCopy = STATUS_COPY[processing?.status] || STATUS_COPY.ready
+  const proposals = links.filter((l) => l.status === 'proposed' && l.relatedMemory)
+  const accepted = links.filter((l) => l.status === 'approved' && l.relatedMemory)
+
   return (
     <main className="auth-wrap memory-detail-wrap">
       <div className="auth-card md-card">
@@ -136,6 +204,9 @@ function MemoryDetail() {
 
         <div className="md-meta">
           <span className="memory-badge">{TYPE_LABELS[memory.type] || memory.type}</span>
+          {processing?.status && processing.status !== 'ready' && (
+            <span className={`memory-status memory-status-${processing.status}`}>{STATUS_COPY[processing.status]?.title || processing.status}</span>
+          )}
           {memory.event_date && (
             <span className="md-meta-item" title={formatFullDate(memory.event_date)}>
               <span className="md-meta-label">Happened:</span>
@@ -153,6 +224,82 @@ function MemoryDetail() {
             </span>
           )}
         </div>
+
+        {statusCopy.title && (
+          <div className={`md-notice memory-status-${processing?.status}`} role="status">
+            <div className="md-notice-body">
+              <strong>{statusCopy.title}</strong>
+              <span>{statusCopy.body}</span>
+              {processing?.error && <span className="md-notice-detail">{processing.error}</span>}
+            </div>
+            {statusCopy.retry && (
+              <button type="button" className="btn-ghost btn-pill" onClick={reprocess} disabled={reprocessing}>
+                {reprocessing ? 'Retrying…' : 'Try again'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {topics.length > 0 && (
+          <div className="md-section">
+            <h4 className="md-section-title">Topics EchoMind picked up</h4>
+            <div className="tag-chips">
+              {topics.map((t) => <span key={t} className="tag-chip">{t}</span>)}
+            </div>
+            <p className="md-muted">
+              Derived from what you saved, to help Ask find this memory. Your words above are never replaced.
+            </p>
+          </div>
+        )}
+
+        {(proposals.length > 0 || accepted.length > 0) && (
+          <div className="md-section">
+            <h4 className="md-section-title">Related memories</h4>
+            <p className="md-muted">
+              Suggestions only. Nothing is merged, changed, or deleted unless you accept it.
+            </p>
+
+            <ul className="link-list">
+              {[...proposals, ...accepted].map((l) => (
+                <li key={l.id} className={`link-row link-${l.status}`}>
+                  <div className="link-body">
+                    <span className="link-relation">
+                      {RELATION_COPY[l.relation] || 'Related to'}{' '}
+                      <Link className="auth-link" to={`/dashboard/memories/${l.relatedMemory.id}`}>
+                        {l.relatedMemory.title}
+                      </Link>
+                    </span>
+                    {l.relatedMemory.preview && (
+                      <span className="link-preview">{l.relatedMemory.preview}</span>
+                    )}
+                  </div>
+                  {l.status === 'proposed' ? (
+                    <span className="link-actions">
+                      <button
+                        type="button"
+                        className="btn-cta btn-pill"
+                        onClick={() => resolveLink(l.id, 'approved')}
+                        disabled={linkBusy === l.id}
+                      >
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-ghost btn-pill"
+                        onClick={() => resolveLink(l.id, 'rejected')}
+                        disabled={linkBusy === l.id}
+                      >
+                        Dismiss
+                      </button>
+                    </span>
+                  ) : (
+                    <span className="memory-status memory-status-ready">Accepted</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="md-section">
           <h4 className="md-section-title">Tags</h4>

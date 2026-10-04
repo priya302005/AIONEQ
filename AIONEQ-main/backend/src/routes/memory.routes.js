@@ -5,6 +5,7 @@ import {
   getMemoryByIdController,
   updateMemoryController,
   deleteMemoryController,
+  reprocessMemoryController,
   getSignedFileUrlController,
   serveSignedFileController,
 } from '../controllers/memory.controller.js'
@@ -20,6 +21,7 @@ import {
 
 const router = Router()
 
+// GET supports paging, type/status filters, and hybrid search via ?q=
 router.route('/')
   .get(requireAuth, validate(listMemoriesQuerySchema, 'query'), getMemoriesController)
   .post(requireAuth, upload.single('file'), validate(createMemorySchema), createMemoryController)
@@ -28,6 +30,9 @@ router.route('/:id')
   .get(requireAuth, validate(idParamSchema, 'params'), getMemoryByIdController)
   .put(requireAuth, validate(idParamSchema, 'params'), validate(updateMemorySchema), updateMemoryController)
   .delete(requireAuth, validate(idParamSchema, 'params'), deleteMemoryController)
+
+// Re-run the understanding pipeline (after an edit, or to retry a failure).
+router.post('/:id/reprocess', requireAuth, validate(idParamSchema, 'params'), reprocessMemoryController)
 
 // Short-lived signed file URLs (authenticated issuer + verified consumer).
 router.get('/:id/signed-url', requireAuth, validate(idParamSchema, 'params'), getSignedFileUrlController)

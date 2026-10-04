@@ -9,6 +9,8 @@ import queryRoutes from './routes/query.routes.js'
 import exportRoutes from './routes/export.routes.js'
 import accountRoutes from './routes/account.routes.js'
 import legacyRoutes from './routes/legacy.routes.js'
+import memoryLinkRoutes from './routes/memoryLink.routes.js'
+import settingsRoutes from './routes/settings.routes.js'
 import { uploadsDir } from './middleware/upload.middleware.js'
 import { notFound, errorHandler } from './middleware/error.middleware.js'
 import { requireAuth } from './middleware/auth.middleware.js'
@@ -80,6 +82,8 @@ app.use('/api/query', queryRoutes)
 app.use('/api/export', exportRoutes)
 app.use('/api/account', accountRoutes)
 app.use('/api/legacy', legacyRoutes)
+app.use('/api/memory-links', memoryLinkRoutes)
+app.use('/api/memory-settings', settingsRoutes)
 
 // NOTE: /uploads is deliberately NOT exposed as a public static path anymore.
 // Uploaded files are only reachable through /api/files/:token (signed,

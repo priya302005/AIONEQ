@@ -1,0 +1,22 @@
+{
+  "architectures": [
+    "GPT2LMHeadModel"
+  ],
+  "model_type": "gpt2",
+  "vocab_size": 4096,
+  "n_embd": 384,
+  "n_head": 6,
+  "n_layer": 6,
+  "n_positions": 256,
+  "n_ctx": 256,
+  "n_inner": 1536,
+  "layer_norm_epsilon": 1e-05,
+  "initializer_range": 0.02,
+  "resid_pdrop": 0.1,
+  "embd_pdrop": 0.1,
+  "attn_pdrop": 0.1,
+  "tie_word_embeddings": true,
+  "eos_token_id": 0,
+  "bos_token_id": 0,
+  "pad_token_id": 0
+}

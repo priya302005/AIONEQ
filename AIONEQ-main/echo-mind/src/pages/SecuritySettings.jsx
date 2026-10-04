@@ -12,6 +12,7 @@ import Logo from '../Logo.jsx'
 
 /**
  * Security & privacy settings:
+ *  - Memory & AI privacy switches (enforced server-side)
  *  - MFA (TOTP) enrollment status + manage
  *  - Full data export (re-auth required)
  *  - Hard account deletion (re-auth + typed confirmation)
@@ -21,6 +22,16 @@ function SecuritySettings() {
   const { notify } = useToast()
   const { user } = useAuth()
   const reauth = useReauth()
+
+  // Memory & AI privacy switches
+  const [memSettings, setMemSettings] = useState({
+    memoryAiEnabled: true,
+    conversationMemoryEnabled: true,
+    processingEnabled: true,
+  })
+  const [memSettingsLoading, setMemSettingsLoading] = useState(true)
+  const [memSettingsBusy, setMemSettingsBusy] = useState(null)
+  const [memSettingsError, setMemSettingsError] = useState('')
 
   // MFA
   const [factors, setFactors] = useState([])
@@ -52,6 +63,57 @@ function SecuritySettings() {
   }, [])
 
   useEffect(() => { loadFactors() }, [loadFactors])
+
+  const loadMemSettings = useCallback(async () => {
+    setMemSettingsLoading(true)
+    try {
+      const res = await api('/api/memory-settings')
+      if (res.data) {
+        setMemSettings({
+          memoryAiEnabled: res.data.memoryAiEnabled !== false,
+          conversationMemoryEnabled: res.data.conversationMemoryEnabled !== false,
+          processingEnabled: res.data.processingEnabled !== false,
+        })
+      }
+    } catch (err) {
+      setMemSettingsError(err.message)
+    } finally {
+      setMemSettingsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadMemSettings() }, [loadMemSettings])
+
+  /**
+   * Flips one privacy switch. The value is rolled back on failure so the UI
+   * never claims a protection that the server did not actually apply.
+   */
+  async function toggleMemSetting(key, value) {
+    setMemSettingsBusy(key)
+    setMemSettingsError('')
+    const previous = memSettings
+    setMemSettings((s) => ({ ...s, [key]: value }))
+    try {
+      const res = await api('/api/memory-settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ [key]: value }),
+      })
+      if (res.data) {
+        setMemSettings((s) => ({
+          ...s,
+          memoryAiEnabled: res.data.memoryAiEnabled !== false,
+          conversationMemoryEnabled: res.data.conversationMemoryEnabled !== false,
+          processingEnabled: res.data.processingEnabled !== false,
+        }))
+      }
+      notify('Privacy setting saved.')
+    } catch (err) {
+      setMemSettings(previous)
+      setMemSettingsError(err.message)
+    } finally {
+      setMemSettingsBusy(null)
+    }
+  }
 
   async function startEnroll() {
     setBusy(true)
@@ -157,6 +219,66 @@ function SecuritySettings() {
           <h2>Protect your legacy</h2>
           <p>MFA, data portability, and permanent deletion.</p>
         </div>
+
+        {/* ---------------- Memory & AI privacy ---------------- */}
+        <section className="sec-settings-card" aria-label="Memory and AI privacy">
+          <h4 className="md-section-title">Memory &amp; AI privacy</h4>
+          <p className="modal-sub">
+            These are enforced by the server, not just remembered by this page. Turning something off
+            takes effect on your very next request.
+          </p>
+
+          {memSettingsLoading ? (
+            <p className="md-muted">Loading…</p>
+          ) : (
+            <ul className="legacy-list">
+              <li className="legacy-row">
+                <span>
+                  <strong>Let Ask use my memories</strong>
+                  <span className="legacy-sub">
+                    When off, the assistant never reads your archive and answers from general knowledge only.
+                  </span>
+                </span>
+                <Toggle
+                  checked={memSettings.memoryAiEnabled}
+                  disabled={memSettingsBusy === 'memoryAiEnabled'}
+                  onChange={(v) => toggleMemSetting('memoryAiEnabled', v)}
+                  label="Let Ask use my memories"
+                />
+              </li>
+              <li className="legacy-row">
+                <span>
+                  <strong>Remember previous conversations</strong>
+                  <span className="legacy-sub">
+                    When off, past chats are not used as context for new questions.
+                  </span>
+                </span>
+                <Toggle
+                  checked={memSettings.conversationMemoryEnabled}
+                  disabled={memSettingsBusy === 'conversationMemoryEnabled'}
+                  onChange={(v) => toggleMemSetting('conversationMemoryEnabled', v)}
+                  label="Remember previous conversations"
+                />
+              </li>
+              <li className="legacy-row">
+                <span>
+                  <strong>Analyse memories automatically</strong>
+                  <span className="legacy-sub">
+                    Transcribes voice notes, reads text out of uploaded documents, and writes the summary
+                    and topics that make search work. Your original content is never replaced.
+                  </span>
+                </span>
+                <Toggle
+                  checked={memSettings.processingEnabled}
+                  disabled={memSettingsBusy === 'processingEnabled'}
+                  onChange={(v) => toggleMemSetting('processingEnabled', v)}
+                  label="Analyse memories automatically"
+                />
+              </li>
+            </ul>
+          )}
+          {memSettingsError && <p className="auth-error" role="alert">{memSettingsError}</p>}
+        </section>
 
         {/* ---------------- MFA ---------------- */}
         <section className="sec-settings-card" aria-label="Two-factor authentication">
@@ -302,6 +424,23 @@ function SecuritySettings() {
         onConfirm={() => { setDeleteConfirmOpen(false); handleDeleteAccount() }}
       />
     </main>
+  )
+}
+
+/** Accessible on/off switch used for the memory privacy controls. */
+function Toggle({ checked, disabled, onChange, label }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className={`privacy-toggle${checked ? ' on' : ''}`}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="privacy-toggle-knob" />
+    </button>
   )
 }
 

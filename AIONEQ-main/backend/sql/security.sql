@@ -63,6 +63,15 @@ create policy "legacy_grants_claim" on public.legacy_grants
   )
   with check (status = 'active' and recipient_user_id = auth.uid() and activated_by = auth.uid());
 
+-- Account deletion ("forget my data"): a user must be able to remove
+-- grants naming them as the recipient (revoking their own access into
+-- someone else's archive). Without this policy the delete silently
+-- matches zero rows under RLS and the grant is orphaned. Grants the
+-- user OWNS are covered by legacy_grants_owner_delete above.
+drop policy if exists "legacy_grants_recipient_delete" on public.legacy_grants;
+create policy "legacy_grants_recipient_delete" on public.legacy_grants
+  for delete using (recipient_user_id = auth.uid());
+
 -- ---- memories: file_size for quota accounting ----
 alter table public.memories add column if not exists file_size bigint;
 

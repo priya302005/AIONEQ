@@ -8,31 +8,42 @@ const execFileAsync = promisify(execFile)
 /**
  * Upload-time malware scan integration point.
  *
- * EchoMind principle #3 (fail closed): when SCAN_COMMAND is configured we run
- * it against the freshly-uploaded file and REJECT the upload on any non-zero
- * exit code (found threat OR scanner failure).
+ * EchoMind principle #3 (fail closed):
  *
- * When no scanner is configured this is a no-op that returns { enabled: false }
- * and logs a one-time audit entry per upload so the gap is visible in the
- * audit trail. This is the flagged integration point for a real AV service
- * (ClamAV/clamd via `clamdscan`, VirusTotal API, S3 Object Lambda, etc).
+ *   - When SCAN_COMMAND is configured we run it against the
+ *     freshly-uploaded file and REJECT the upload on any
+ *     non-zero exit code (found threat OR scanner failure).
+ *   - When no scanner is configured the behaviour depends on
+ *     `cfg.uploadScanRequired` (REQUIRE_UPLOAD_SCAN, defaulting
+ *     to true in production):
+ *        required  -> the upload is NOT clean (rejected), so
+ *                     production can never treat an unscanned
+ *                     upload as clean;
+ *        not required (development/test) -> the scan is skipped
+ *                     so the upload flow stays usable, and the
+ *                     gap is still audited per upload.
+ *
+ * `cfg` is injectable so the three paths can be unit-tested
+ * without touching the real environment.
  */
-export async function scanFile(filePath, { userId, ip }) {
-  if (!config.scanCommand) {
+export async function scanFile(filePath, { userId, ip }, cfg = config) {
+  if (!cfg.scanCommand) {
     audit({ action: 'upload.scan_not_configured', userId, ip, detail: { filePath: basenameOf(filePath) } })
-    return { enabled: false, clean: null }
+    // Fail closed when a scanner is required; otherwise a
+    // documented, audited no-op.
+    return { enabled: false, clean: cfg.uploadScanRequired ? false : true, scanned: false }
   }
-  const [cmd, ...args] = config.scanCommand.split(' ')
+  const [cmd, ...args] = cfg.scanCommand.split(' ')
   try {
     const { stdout } = await execFileAsync(cmd, [...args, filePath], { timeout: 30_000 })
     const clean = /^0$/m.test(String(stdout).trim()) || !/: FOUND/m.test(String(stdout))
     if (!clean) {
       audit({ action: 'upload.scan_threat', userId, ip, detail: { filePath: basenameOf(filePath) } })
     }
-    return { enabled: true, clean }
+    return { enabled: true, clean, scanned: true }
   } catch {
     // Scanner error => fail closed.
-    return { enabled: true, clean: false }
+    return { enabled: true, clean: false, scanned: true }
   }
 }
 

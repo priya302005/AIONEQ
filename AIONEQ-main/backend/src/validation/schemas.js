@@ -39,6 +39,9 @@ export const createMemorySchema = z.object({
   type: z.enum(['voice', 'journal', 'email', 'document', 'story']),
   title: z.string().trim().min(1, 'Title is required.').max(200),
   content: z.string().max(200_000).optional().default(''),
+  // Voice notes recorded in the browser carry a browser-generated transcript.
+  // An uploaded audio file does not, so the user may supply one here.
+  transcript: z.string().max(200_000).optional(),
   tags: z.union([z.array(z.string().trim().max(60)), z.string().max(500)]).optional().default([]),
   eventDate: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
   duration: z.coerce.number().int().positive().optional(),
@@ -48,13 +51,21 @@ export const updateMemorySchema = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
     content: z.string().max(200_000).optional(),
+    transcript: z.string().max(200_000).optional(),
     tags: z.union([z.array(z.string().trim().max(60)), z.string().max(500)]).optional(),
     eventDate: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to update.' })
 
+// `q` drives hybrid retrieval (semantic + full-text + lexical).
+const memoryTypeEnum = z.enum(['voice', 'journal', 'email', 'document', 'story'])
+
 export const listMemoriesQuerySchema = z.object({
-  type: z.enum(['voice', 'journal', 'email', 'document', 'story']).optional(),
+  type: memoryTypeEnum.optional(),
+  status: z.enum(['pending', 'processing', 'ready', 'partial', 'failed']).optional(),
+  q: z.string().trim().min(1).max(500).optional(),
+  limit: z.coerce.number().int().positive().max(500).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
   sort: z
     .string()
     .regex(/^-?[a-z_]+$/)
@@ -64,6 +75,32 @@ export const listMemoriesQuerySchema = z.object({
 export const idParamSchema = z.object({
   id: z.uuid('Invalid id.'),
 })
+
+// ------------------------------------------------------- memory links -----
+
+export const memoryLinksQuerySchema = z.object({
+  memoryId: z.uuid('Invalid memory id.'),
+  status: z.enum(['proposed', 'approved', 'rejected']).optional(),
+})
+
+export const createMemoryLinkSchema = z.object({
+  relatedMemoryId: z.uuid('Invalid memory id.'),
+  relation: z.enum(['duplicate', 'follow_up', 'supersedes', 'related']),
+})
+
+export const resolveMemoryLinkSchema = z.object({
+  status: z.enum(['approved', 'rejected']),
+})
+
+// ------------------------------------------------------------ settings -----
+
+export const updateSettingsSchema = z
+  .object({
+    memoryAiEnabled: z.boolean().optional(),
+    conversationMemoryEnabled: z.boolean().optional(),
+    processingEnabled: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to update.' })
 
 // -------------------------------------------------------------- query ------
 export const askSchema = z.object({
