@@ -35,12 +35,24 @@ const RECALL_RE =
   /\b(remember|saved|save|wrote|written|wrote down|mentioned|posted|said|told|journal|notebook|note|notes|memory|memories|talked about|discussed|recorded|stored|that day)\b/i
 const ACTION_RE =
   /\b(prepare|study|plan|planning|decide|suggest|help me|what next|what should i|how do i|advice|practice|focus on|start|should i)\b/i
+/*
+ * Personal-data recall that names no recall keyword.
+ *
+ * RECALL_RE only fires on explicit words ("remember", "journal", "notes"), so
+ * ordinary possessive questions - "give me my friend details", "tell me my name",
+ * "what is my dream" - were classified with no intent at all. `recall` gates the
+ * weak-match safety net further down, so those questions got nothing: not a
+ * strong memory, and not even the single best partial one. Asking about one's
+ * own stored details is a recall request regardless of the wording.
+ */
+const PERSONAL_RE =
+  /\b(my|our)\s+\w+|\b(details?|info|information|contact)\s+(about|on|of)\b|\bwho\s+is\s+(my|our)\b/i
 
 export function classifyIntent(question) {
   const q = String(question || '')
   const tokens = tokenize(q)
   const vague = VAGUE_RE.test(q) || tokens.length <= 3
-  const recall = vague || RECALL_RE.test(q)
+  const recall = vague || RECALL_RE.test(q) || PERSONAL_RE.test(q)
   const action = ACTION_RE.test(q)
   return {
     vague,
@@ -197,10 +209,24 @@ export async function retrieveContextFrom(client, userId, question, opts = {}) {
 
   // ---- source 3: saved memories ------------------------------------------
   let scoredMemories = []
-  try {
-    scoredMemories = await retrieveScoredMemoriesFrom(client, userId, q)
-  } catch {
-    /* memories table missing -> memory source empty */
+  /*
+   * If the caller already retrieved memories, reuse them verbatim.
+   *
+   * Re-fetching here used to re-score the same rows with a *second, lexical-only*
+   * scorer, which silently disagreed with the caller's vector+lexical fusion: a
+   * memory the vector search had matched at 0.68 was re-scored 0.0 and then
+   * dropped by minScore, so the prompt reported "no saved memory" and the model
+   * refused a question it had actually been given the answer to. One retrieval,
+   * one score, no second opinion.
+   */
+  if (Array.isArray(opts.memories)) {
+    scoredMemories = opts.memories
+  } else {
+    try {
+      scoredMemories = await retrieveScoredMemoriesFrom(client, userId, q)
+    } catch {
+      /* memories table missing -> memory source empty */
+    }
   }
   debug.stages.push({
     source: 'saved_memories',

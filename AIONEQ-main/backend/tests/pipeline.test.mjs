@@ -23,6 +23,7 @@ import {
   primaryText,
   deriveText,
   analyseMemory,
+  planAnalysis,
 } from '../src/services/memoryPipeline.js'
 import { describeStatus } from '../src/services/memoryIngestion.js'
 import { extractDocumentText, ExtractionError } from '../src/services/documentExtract.js'
@@ -231,6 +232,54 @@ test('an unavailable local AI degrades the summary instead of failing the memory
   assert.ok(Array.isArray(out.entities))
   // A provider error is reported so the UI can explain the missing summary.
   if (out.providerError) assert.equal(typeof out.providerError, 'string')
+})
+
+// --------------------------------------------------- skipping unchanged text --
+
+test('metadata derived from identical text is reused instead of recomputed', () => {
+  const text = 'A perfectly ordinary note about the garden.'
+  const first = planAnalysis({ text, memory: {} })
+  assert.equal(first.reuse, false, 'a memory that was never analysed must be analysed')
+
+  const memory = {
+    analysis_hash: first.hash,
+    ai_summary: 'A note about the garden.',
+    topics: ['garden'],
+    keywords: ['garden'],
+    entities: [],
+  }
+  const second = planAnalysis({ text, memory })
+  assert.equal(second.reuse, true)
+  assert.equal(second.metadata.summary, 'A note about the garden.')
+  assert.deepEqual(second.metadata.topics, ['garden'])
+})
+
+test('changed note text is always re-analysed', () => {
+  const analysed = planAnalysis({ text: 'the original note', memory: {} })
+  const memory = { analysis_hash: analysed.hash, ai_summary: 'Original.', topics: [], keywords: [], entities: [] }
+  assert.equal(planAnalysis({ text: 'the original note, corrected', memory }).reuse, false)
+  // Whitespace-only differences do not change what the model would be told.
+  assert.equal(planAnalysis({ text: 'the original note\n', memory }).reuse, false)
+})
+
+test('an explicit reprocess is never short-circuited', () => {
+  const analysed = planAnalysis({ text: 'unchanged note', memory: {} })
+  const memory = { analysis_hash: analysed.hash, ai_summary: 'Kept.', topics: [], keywords: [], entities: [] }
+  // reprocessMemory clears the hash, so the same text is analysed again.
+  assert.equal(planAnalysis({ text: 'unchanged note', memory: { ...memory, analysis_hash: null } }).reuse, false)
+})
+
+test('a hash without stored metadata is not reused', () => {
+  const analysed = planAnalysis({ text: 'note text', memory: {} })
+  assert.equal(planAnalysis({ text: 'note text', memory: { analysis_hash: analysed.hash } }).reuse, false)
+})
+
+test('the stored fingerprint is a hash, not the note text', () => {
+  const { hash } = planAnalysis({ text: 'the vault combination is 4417', memory: {} })
+  assert.equal(typeof hash, 'string')
+  assert.equal(hash.includes('4417'), false)
+  assert.equal(hash.includes('vault'), false)
+  assert.equal(hash.length, 64, 'expected a sha256 hex digest')
 })
 
 // ------------------------------------------------------ the never-overwrite rule --

@@ -28,7 +28,7 @@ import path from 'node:path'
 process.env.LEGACY_VERIFICATION = ''
 process.env.AUDIT_ENABLED = 'false'
 
-const { checkEnv, MIN_SIGNED_URL_SECRET_LENGTH } = await import(
+const { checkEnv, MIN_SIGNED_URL_SECRET_LENGTH, looksLikePlaceholderCredential } = await import(
   '../src/config/startup.js'
 )
 const { scanFile } = await import('../src/middleware/scan.middleware.js')
@@ -56,9 +56,26 @@ function baseCfg(overrides = {}) {
     signedUrlSecret: 'a'.repeat(MIN_SIGNED_URL_SECRET_LENGTH),
     localAiBaseUrl: 'http://localhost:4891',
     supabaseServiceRoleKey: 'service-role-value',
+    // Production requires claim grounding; a valid config has it on.
+    aiClaimGroundingEnabled: true,
     ...overrides,
   }
 }
+
+test('checkEnv: production refuses to serve ungrounded answers', () => {
+  const { productionErrors } = checkEnv(baseCfg({ aiClaimGroundingEnabled: false }))
+  assert.ok(
+    productionErrors.some((e) => e.includes('AI_CLAIM_GROUNDING')),
+    `expected the grounding refusal, got: ${productionErrors}`
+  )
+})
+
+test('checkEnv: grounding may be switched off outside production (measurement)', () => {
+  const { productionErrors } = checkEnv(
+    baseCfg({ env: 'development', aiClaimGroundingEnabled: false })
+  )
+  assert.deepEqual(productionErrors, [])
+})
 
 // ------------------------------------------------- SIGNED_URL_SECRET ----
 
@@ -123,6 +140,65 @@ test('checkEnv: an invalid LLM URL is fatal', () => {
     productionErrors.some((e) => e.includes('not a valid URL')),
     `expected invalid-URL rejection, got: ${productionErrors}`
   )
+})
+
+// ------------------------------------------- placeholder credentials ----
+
+test('checkEnv: a .env.example placeholder credential is fatal in production', () => {
+  // The failure this prevents: the .env.example values are left in place, every
+  // signup/login dies inside the Supabase SDK, and the symptom (a 400 or a 401)
+  // points at the user's password instead of at the missing setup step.
+  const { missing, invalid, productionErrors } = checkEnv(
+    baseCfg({
+      supabaseUrl: 'https://YOUR-PROJECT.supabase.co',
+      supabaseAnonKey: 'your-anon-key',
+    })
+  )
+  assert.ok(invalid.includes('SUPABASE_URL'), `expected SUPABASE_URL invalid, got: ${invalid}`)
+  assert.ok(invalid.includes('SUPABASE_ANON_KEY'), `expected anon key invalid, got: ${invalid}`)
+  assert.ok(!missing.includes('SUPABASE_URL'), 'a placeholder is not "missing" - it is set but fake')
+  assert.deepEqual(productionErrors, [], 'reported via `invalid`, not `productionErrors`')
+})
+
+test('checkEnv: development starts on a placeholder credential but says so loudly', () => {
+  // Dev must stay usable while the operator sorts out credentials (same policy
+  // as the SIGNED_URL_SECRET fallback): warn, do not exit. The auth endpoints
+  // answer 503 on their own, so the failure is still never mistaken for bad
+  // input.
+  const { invalid, warnings } = checkEnv(
+    baseCfg({
+      env: 'development',
+      supabaseUrl: 'https://YOUR-PROJECT.supabase.co',
+      supabaseAnonKey: 'your-anon-key',
+    })
+  )
+  assert.deepEqual(invalid, [], 'a placeholder must not block a dev server from starting')
+  assert.ok(
+    warnings.some((w) => w.includes('placeholder') && w.includes('SUPABASE_ANON_KEY')),
+    `expected a loud placeholder warning, got: ${warnings}`
+  )
+})
+
+test('looksLikePlaceholderCredential: real Supabase key shapes are not flagged', () => {
+  // Legacy anon keys are JWTs; current keys are sb_publishable_/sb_secret_
+  // tokens. Neither can match a placeholder pattern, so these must pass.
+  const jwtLike = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiJ9.signature'
+  assert.equal(looksLikePlaceholderCredential(jwtLike), false)
+  assert.equal(looksLikePlaceholderCredential('sb_publishable_abcdef0123456789'), false)
+  assert.equal(looksLikePlaceholderCredential('sb_secret_abcdef0123456789'), false)
+  assert.equal(looksLikePlaceholderCredential('https://abcdefgh.supabase.co'), false)
+
+  assert.equal(looksLikePlaceholderCredential('local-dev-placeholder-anon-key-not-a-real-credential'), true)
+  assert.equal(looksLikePlaceholderCredential('https://YOUR-PROJECT.supabase.co'), true)
+  assert.equal(looksLikePlaceholderCredential('https://YOUR_PROJECT.supabase.co'), true)
+  assert.equal(looksLikePlaceholderCredential('your-anon-key'), true, '.env.example sample value')
+  assert.equal(looksLikePlaceholderCredential('changeme'), true)
+  assert.equal(
+    looksLikePlaceholderCredential('change-me-to-a-long-random-string-at-least-32-chars'),
+    true,
+    '.env.example signed-url secret sample value'
+  )
+  assert.equal(looksLikePlaceholderCredential(''), false, 'empty is "missing", handled separately')
 })
 
 // ------------------------------------------------- upload scanning ----

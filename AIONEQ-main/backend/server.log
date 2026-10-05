@@ -1,0 +1,2 @@
+EchoMind API running on http://127.0.0.1:4000 (development)
+[MEMORY RETRIEVAL] {"userId":"3c98190f-3aad-4d4d-bb22-8bae6026abe7","questionLength":3,"selected":[{"id":"99db8bc7-79ae-4ca7-b8df-450d1d5e1b46","score":1,"matchedBy":"semantic+keyword+lexical"},{"id":"67a1de13-a1e4-42bd-b82b-15025a42057a","score":0.5625,"matchedBy":"semantic+keyword+lexical"}]}

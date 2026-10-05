@@ -20,6 +20,7 @@ import { assertMemoryOwnership } from '../utils/assertOwnership.js'
 import { grantFor } from '../models/legacy.model.js'
 import { uploadsDir } from '../middleware/upload.middleware.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
+import { schemaHint as missingTableHint } from '../utils/schemaHint.js'
 import { verifyUpload } from '../utils/fileMagic.js'
 import { scanFile } from '../middleware/scan.middleware.js'
 import { assertQuota } from '../utils/quota.js'
@@ -42,12 +43,6 @@ function parseTags(tags) {
 function parseDuration(value) {
   const n = Number(value)
   return Number.isFinite(n) && n > 0 ? Math.round(n) : undefined
-}
-
-function missingTableHint(msg) {
-  return /relation .*memories.* does not exist|could not find the table ['"]?public\.memories['"]?/i.test(msg)
-    ? 'Memories table is missing. Run the SQL in backend/sql/memories.sql in your Supabase dashboard.'
-    : msg
 }
 
 function removeUploadedFile(fileUrl) {

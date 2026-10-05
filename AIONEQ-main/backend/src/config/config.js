@@ -35,6 +35,33 @@ function corsOrigins() {
     .filter(Boolean)
 }
 
+/**
+ * Values that are obviously not real credentials. `.env.example` ships
+ * `https://YOUR-PROJECT.supabase.co` / `your-anon-key`, and hand-written .env
+ * files keep them. Real Supabase keys are a JWT (`eyJ...`) or an
+ * `sb_publishable_...` / `sb_secret_...` token, so these patterns cannot match
+ * a genuine credential.
+ *
+ * Left in place, a placeholder produces an opaque failure from deep inside the
+ * Supabase SDK on every single signup/login - which reads like an application
+ * bug rather than a missing setup step.
+ */
+const PLACEHOLDER_PATTERNS = [
+  /your[-_ ]?project/i,
+  /^your[-_ ]/i, // .env.example ships `your-anon-key` / `your-service-role-key`
+  /placeholder/i,
+  /not-a-real/i,
+  /replace[-_ ]?me/i,
+  /^change[-_ ]?me/i, // .env.example ships a `change-me-...` signed-url secret
+  /^changeme$/i,
+]
+
+/** True when a credential value is absent-but-present: set, yet obviously fake. */
+export function looksLikePlaceholderCredential(value) {
+  if (!value) return false
+  return PLACEHOLDER_PATTERNS.some((re) => re.test(String(value)))
+}
+
 export const config = {
   // --- server ---
   port: int(process.env.PORT, 4000),
@@ -46,6 +73,17 @@ export const config = {
   // --- supabase ---
   supabaseUrl: process.env.SUPABASE_URL,
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
+  // True only when both credentials are present AND not sample values. Used to
+  // tell a permanent misconfiguration ("retrying will never help") apart from a
+  // genuine upstream outage ("try again in a moment") - see auth.controller.js.
+  // Startup refuses to boot in production when this is false, so it can only be
+  // observed outside production.
+  supabaseCredentialsUsable: Boolean(
+    process.env.SUPABASE_URL &&
+      process.env.SUPABASE_ANON_KEY &&
+      !looksLikePlaceholderCredential(process.env.SUPABASE_URL) &&
+      !looksLikePlaceholderCredential(process.env.SUPABASE_ANON_KEY)
+  ),
   // Optional: only required for account deletion of the auth user record.
   // NEVER exposed to the frontend; used exclusively server-side.
   supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || null,
@@ -61,6 +99,57 @@ export const config = {
   // window) cannot fit the full EchoMind prompt. When enabled, use a stripped
   // system prompt and a truncated memory context so the request fits the model.
   localAiCompactPrompt: bool(process.env.LOCAL_AI_COMPACT_PROMPT, false),
+
+  // --- AI inference (generation parameters) ---
+  // One place for every generation parameter the unified inference service
+  // (src/services/inferenceService.js) applies. The defaults are EXACTLY the
+  // values that were previously hardcoded in llmClient and in the ask/pipeline
+  // call sites, so behaviour is unchanged until an operator overrides them.
+  //
+  // Provider limits: these are passed straight to an OpenAI-compatible
+  // /v1/chat/completions (or /v1/completions) endpoint. Values outside a
+  // provider's accepted range are its own validation error, surfaced as a
+  // 4xx ProviderError - they are never silently clamped here, because a silent
+  // clamp would make a misconfiguration invisible.
+  aiTemperature: num(process.env.AI_TEMPERATURE, 0.5),
+  aiMaxTokens: int(process.env.AI_MAX_TOKENS, 700),
+  aiTimeoutMs: int(process.env.AI_TIMEOUT_MS, 20_000),
+  // Retries for transient failures only (5xx, 429, connection resets). Bounded
+  // so a dead provider cannot turn one user request into a long stall. Zero is a
+  // legitimate setting - the relation classifier uses it - so this accepts 0.
+  aiRetries: num(process.env.AI_RETRIES, 1),
+  aiTopP: num(process.env.AI_TOP_P, 0.9),
+  aiRepeatPenalty: num(process.env.AI_REPEAT_PENALTY, 1.2),
+  aiFrequencyPenalty: num(process.env.AI_FREQUENCY_PENALTY, 0.3),
+  aiPresencePenalty: num(process.env.AI_PRESENCE_PENALTY, 0.3),
+  // Hard ceiling on the characters handed to the model for one ask. Sections
+  // are trimmed to fit (see services/memoryContext.js buildContext). This is a
+  // prompt-side budget; it is not a substitute for the model's own window.
+  aiContextMaxChars: int(process.env.AI_CONTEXT_MAX_CHARS, 6000),
+
+  // --- AI evaluation ---
+  // When true (the default) the ask path applies deterministic claim grounding
+  // (services/claimGrounding.js): a citation to an id that was not retrieved is
+  // deleted from the answer, and an assertion with no support in the supplied
+  // excerpts is removed. Turning it off is only useful for an A/B comparison of
+  // the grounding rate and is refused in production by startup.js, where an
+  // ungrounded answer must never be servable.
+  aiClaimGroundingEnabled: bool(process.env.AI_CLAIM_GROUNDING, true),
+
+  // When a question is about the user's own life and retrieval matched nothing,
+  // hand the model the most recent memories anyway instead of replying "I found
+  // nothing". Bag-of-words retrieval cannot connect "tell me my name" to a
+  // memory reading "i am Janani" - the word "name" is not in it - so without this
+  // a correctly stored fact is unreachable.
+  //
+  // Default OFF because it spends a model call on questions that may have no
+  // answer, and a model asked about absent data may answer anyway. The safe
+  // alternative is a real embedding model plus a reindex (EMBEDDING_MODE), which
+  // ranks semantically without asking a model to judge relevance.
+  //
+  // When enabled, an answer is still only shown if it cites a supplied memory;
+  // an uncited reply falls back to the honest refusal.
+  aiBroadRecallEnabled: bool(process.env.AI_BROAD_RECALL, false),
 
   // --- context engine (Ask) ---
   // Relevance floor (0..1) for retrieved context; anything below is rejected.

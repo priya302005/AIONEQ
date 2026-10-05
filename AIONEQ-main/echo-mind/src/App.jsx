@@ -12,6 +12,7 @@ import UploadPage from './pages/UploadPage.jsx'
 import Ask from './pages/Ask.jsx'
 import MemoryDetail from './pages/MemoryDetail.jsx'
 import SecuritySettings from './pages/SecuritySettings.jsx'
+import Profile from './pages/Profile.jsx'
 import LegacyAccess from './pages/LegacyAccess.jsx'
 import RequireAuth from './components/RequireAuth.jsx'
 import { AuthProvider, useAuth } from './auth'
@@ -123,10 +124,27 @@ function Shell() {
           <div className="nav-actions">
             {user ? (
               <>
-                <span className="nav-user" title={displayName || 'Account'}>
-                  <span className="nav-avatar">{avatarText}</span>
-                  <span className="nav-username">{displayName || 'Account'}</span>
-                </span>
+                {/* The dashboard is the app itself. It used to be reachable only
+                    by finding a call to action on the home page, so anyone who
+                    had navigated away to About had no way back except the logo.
+                    One click, from every page. */}
+                <button
+                  type="button"
+                  className="btn-primary btn-nav"
+                  onClick={() => navigate('/dashboard')}
+                  aria-current={location.pathname.startsWith('/dashboard') ? 'page' : undefined}
+                >
+                  Dashboard
+                </button>
+                <button
+                    type="button"
+                    className="nav-user nav-user-link"
+                    onClick={() => navigate('/profile')}
+                    aria-label="Manage your profile"
+                  >
+                    <span className="nav-avatar">{avatarText}</span>
+                    <span className="nav-username">{displayName || 'Account'}</span>
+                  </button>
                 <button type="button" className="btn-ghost" onClick={() => navigate('/security')}>Security</button>
                 <button type="button" className="btn-ghost" onClick={logout}>Log Out</button>
               </>
@@ -172,6 +190,10 @@ function Shell() {
         <Route
           path="/dashboard/legacy-access"
           element={<RequireAuth><LegacyAccess /></RequireAuth>}
+        />
+        <Route
+          path="/profile"
+          element={<RequireAuth><Profile /></RequireAuth>}
         />
         <Route
           path="/security"

@@ -1,42 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { supabase } from '../supabaseClient'
 
 /**
- * Route guard. Fails CLOSED: renders nothing and redirects to /login on any
- * error while checking auth state. It verifies the session with a server-side
- * getUser() call (not just "is there a token").
+ * Route guard. Fails CLOSED: renders nothing until the auth state is known, and
+ * redirects to /login whenever there is no user.
+ *
+ * It deliberately does NOT call supabase.auth.getUser() itself. AuthProvider
+ * already performs exactly that server-side verification on mount, so a second
+ * check only doubled the round trips on every page load and, worse, turned any
+ * transient network blip into a redirect carrying a misleading
+ * "Session expired" message. One verified source of truth, one redirect.
  */
 function RequireAuth({ children }) {
   const { user, loading } = useAuth()
   const navigate = useNavigate()
-  const [verifying, setVerifying] = useState(true)
-  const [ok, setOk] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    async function verify() {
-      try {
-        const { error } = await supabase.auth.getUser()
-        if (cancelled) return
-        if (error) {
-          setOk(false)
-          navigate('/login', { replace: true, state: { reason: 'Session expired. Please log in again.' } })
-        } else {
-          setOk(true)
-        }
-      } catch {
-        if (cancelled) return
-        setOk(false)
-        navigate('/login', { replace: true, state: { reason: 'Unable to verify your session. Please log in again.' } })
-      } finally {
-        if (!cancelled) setVerifying(false)
-      }
-    }
-    verify()
-    return () => { cancelled = true }
-  }, [navigate])
 
   useEffect(() => {
     if (!loading && !user) {
@@ -44,7 +22,7 @@ function RequireAuth({ children }) {
     }
   }, [loading, user, navigate])
 
-  if (loading || !user || verifying || !ok) return null
+  if (loading || !user) return null
   return children
 }
 

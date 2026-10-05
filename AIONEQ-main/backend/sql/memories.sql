@@ -22,6 +22,13 @@ create index if not exists memories_user_type_idx on public.memories (user_id, t
 alter table public.memories add column if not exists duration integer;
 alter table public.memories add column if not exists mime_type text;
 
+-- Fingerprint of the exact text the AI metadata was last derived from. When an
+-- edit leaves that text unchanged, the pipeline reuses the stored summary
+-- instead of spending another model call. Cleared by resetDerived() so an
+-- explicit "process again" always redoes the work. Contains no user text: it is
+-- a SHA-256 of it, so it cannot be read back to recover the note.
+alter table public.memories add column if not exists analysis_hash text;
+
 alter table public.memories enable row level security;
 
 drop policy if exists "memories_select_own" on public.memories;

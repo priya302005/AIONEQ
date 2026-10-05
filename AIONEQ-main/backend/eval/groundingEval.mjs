@@ -71,8 +71,7 @@ function groundedStub({ user }) {
     const lines_ = block.split('\n')
     const headerEnd = lines_.findIndex((l) => !l.startsWith('[') && !l.startsWith('topics:') && !l.startsWith('('))
     const excerpt = lines_.slice(Math.max(0, headerEnd)).join(' ').replace(/\s+/g, ' ').trim()
-    const fragment = excerpt.slice(0, 72)
-    lines.push(`from my notes: "${fragment}" (cite: ${id})`)
+    lines.push(`from my notes: "${clip(excerpt, 72)}" (cite: ${id})`)
   }
   const hallucinated = randomId()
   lines.push(`a personal detail I seem to recall (cite: ${hallucinated})`)
@@ -85,11 +84,54 @@ function groundedStub({ user }) {
   ].join('\n')
 }
 
+/**
+ * Proves the detector still bites, using a pair it has never seen: an
+ * uncited sentence about an unrelated subject must be flagged, and a cited one
+ * must not be. Returns a verdict rather than a number so a silent detector
+ * cannot be reported as a clean run.
+ */
+function detectorSelfTest() {
+  const excerpts = [
+    { id: '11111111-0000-4000-8000-000000000001', text: 'I adopted a dog named Biscuit.' },
+  ]
+  const uncited = unsupportedSentences(
+    'The ferry to Kalymnos was cancelled twice last winter.',
+    excerpts
+  )
+  const cited = unsupportedSentences(
+    `I adopted a dog named Biscuit (cite: 11111111-0000-4000-8000-000000000001).`,
+    excerpts
+  )
+  const fabricatedCite = unsupportedSentences(
+    'I adopted a dog named Biscuit (cite: 99999999-9999-4999-8999-999999999999).',
+    excerpts
+  )
+  const ok =
+    uncited.bad.length === 1 &&
+    cited.bad.length === 0 &&
+    fabricatedCite.bad.length === 1 &&
+    fabricatedCite.probes.length === 0
+  return { ok, uncitedFlagged: uncited.bad.length, citedFlagged: cited.bad.length, fabricatedCiteFlagged: fabricatedCite.bad.length }
+}
+
 function randomId() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
   })
+}
+
+/**
+ * Clips to a whole word. A stub that cuts mid-word ("the old o") produces
+ * fragments that are not what any model would emit, and measuring them tells us
+ * about the clipper rather than about the grounding layer.
+ */
+function clip(text, max) {
+  const s = String(text || '')
+  if (s.length <= max) return s
+  const cut = s.slice(0, max)
+  const space = cut.lastIndexOf(' ')
+  return `${(space > max / 2 ? cut.slice(0, space) : cut).trim()}...`
 }
 
 // ------------------------------------------------------------ measuring ---
@@ -110,27 +152,38 @@ function contentTokens(text) {
 }
 
 function sentences(text) {
+  // Same unit boundaries the claim layer uses: sentence punctuation, newlines,
+  // and a completed citation marker. Grading on coarser boundaries than that
+  // would let an uncited fragment pass on vocabulary that only a cited
+  // neighbour happened to supply.
   return String(text || '')
-    .split(/[.!?]+/)
-    .map((s) => s.trim())
+    .split(/(?<=[.!?])\s+|\n+|((?:\(\s*cite:\s*[0-9a-fA-F-]{36}\s*\)[ \t]*\.?[ \t]*)+)/)
+    .map((s) => (s || '').trim())
     .filter((s) => s.length > 0)
 }
 
 /**
- * A sentence is "supported" when at least one of its content words
- * (length > 3) appears in the retrieved excerpts. Quoted fragments
- * pass by construction; an invented name, date or number fails.
+ * A unit is "supported" when at least one of its content words
+ * (length > 3) appears in the retrieved excerpts. A unit carrying
+ * a citation to a memory that was actually supplied passes by
+ * construction - the citation is its support, and how well it matches
+ * its excerpt is reported separately as weak attribution. Quoted
+ * fragments pass on the same basis; an invented name, date or number
+ * without a citation fails.
  *
  * The stub deliberately emits one probe sentence ("a personal
  * detail I seem to recall") per model call to prove detection
  * works. Those are counted separately from genuine violations.
  */
 const PROBE_MARKER = 'personal detail i seem to recall'
+const CITE_MARKER_RE = /\(\s*cite:\s*([0-9a-fA-F-]{36})\s*\)/
 
 function unsupportedSentences(answer, excerpts) {
   const haystack = new Set()
+  const supplied = new Set()
   for (const excerpt of excerpts) {
-    for (const t of contentTokens(excerpt)) haystack.add(t)
+    for (const t of contentTokens(excerpt.text)) haystack.add(t)
+    supplied.add(String(excerpt.id || '').toLowerCase())
   }
   const bad = []
   const probes = []
@@ -141,6 +194,8 @@ function unsupportedSentences(answer, excerpts) {
       probes.push(sentence)
       continue
     }
+    const cite = sentence.match(CITE_MARKER_RE)
+    if (cite && supplied.has(cite[1].toLowerCase())) continue
     const supported = words.some((w) => haystack.has(w))
     if (!supported) bad.push(sentence)
   }
@@ -159,6 +214,7 @@ async function main() {
   }
 
   const records = []
+let previewSkew = 0
   for (const item of QUESTIONS) {
     // Fresh conversation state per question: the ask flow
     // persists a conversation for every question, and prior
@@ -170,7 +226,7 @@ async function main() {
 
     const result = await runAsk({ userId: PRIMARY_USER_ID, question: item.question })
 
-    const retrieved = (result.body?.usedMemories || []).map((m) => m.memoryId)
+    const previewIds = (result.body?.usedMemories || []).map((m) => m.memoryId)
     const cited = (result.body?.citedMemories || []).map((m) => m.memoryId)
     const gold = (item.gold || []).map((g) => g.id ?? g)
 
@@ -191,8 +247,14 @@ async function main() {
         })
       }
     }
-    const excerptTexts = excerpts.map((e) => e.text)
-
+    // What was actually retrieved is what was supplied to the model. The
+    // response body only carries a UI-sized preview of that list, so measuring
+    // against it reports every memory beyond the preview as a miss and every
+    // honest citation to one as fabricated.
+    const retrieved = excerpts.map((e) => e.id)
+    if (previewIds.length !== retrieved.length) {
+      previewSkew++
+    }
     // Citation-level grounding: every surviving citation must be a
     // retrieved id. (The stub also emits one hallucinated citation;
     // if it survived, that is a hard failure.)
@@ -204,9 +266,11 @@ async function main() {
     // the detector works, it is not a pipeline regression.
     // When nothing was retrieved the answer is the designed
     // honest fallback, not an unsupported claim.
+    // Passes the keyed excerpts, not just the texts: the detector also needs the
+    // ids to tell a supplied citation from a fabricated one.
     const { bad, probes } =
-      excerptTexts.length > 0
-        ? unsupportedSentences(result.body?.answer || '', excerptTexts)
+      excerpts.length > 0
+        ? unsupportedSentences(result.body?.answer || '', excerpts)
         : { bad: [], probes: [] }
 
     // Missing relevant context: gold memories the retriever missed.
@@ -247,6 +311,8 @@ async function main() {
       unsupportedCitations,
       unsupportedClaims: bad,
       probeSentencesDetected: probes,
+      // One probe per model call, whether or not it survived into the answer.
+      probeSentencesExpected: result.llmCalls,
       missingContext: missingGold,
       goldCount: gold.length,
       retrievedCount: retrieved.length,
@@ -275,6 +341,13 @@ async function main() {
     questionsWithUnsupportedClaims: records.filter((r) => r.unsupportedClaims.length > 0).length,
     unsupportedClaimSentences: records.reduce((n, r) => n + r.unsupportedClaims.length, 0),
     probeSentencesDetected: records.reduce((n, r) => n + r.probeSentencesDetected.length, 0),
+    probeSentencesEmitted: records.reduce((n, r) => n + r.probeSentencesExpected, 0),
+    // Questions whose response preview was shorter than what was supplied.
+    previewShorterThanRetrieved: previewSkew,
+    // A count of zero probes no longer proves anything on its own: once the
+    // claim layer removes every probe, the corpus can no longer detect itself.
+    // This asserts the detector on a known-bad pair instead.
+    detectorSelfTest: detectorSelfTest(),
     // Coverage of the ground truth.
     questionsMissingGold: answerable.filter((r) => r.missingContext.length > 0).length,
     goldMemoriesMissed: answerable.reduce((n, r) => n + r.missingContext.length, 0),
@@ -309,11 +382,13 @@ async function main() {
   console.log('CONTENT GROUNDING')
   console.log(`  questions with unsupported claims : ${summary.questionsWithUnsupportedClaims} / ${summary.questions}`)
   console.log(`  unsupported claim sentences       : ${summary.unsupportedClaimSentences}`)
-  console.log(`  probe sentences detected (stub)   : ${summary.probeSentencesDetected}  (detector self-test)`)
+  console.log(`  probe sentences detected (stub)   : ${summary.probeSentencesDetected} / ${summary.probeSentencesEmitted} emitted  (0 = the claim layer removed every one)`)
+  console.log(`  detector self-test                : ${summary.detectorSelfTest.ok ? 'PASS' : 'FAIL'}  (uncited flagged ${summary.detectorSelfTest.uncitedFlagged}, cited flagged ${summary.detectorSelfTest.citedFlagged}, fabricated id flagged ${summary.detectorSelfTest.fabricatedCiteFlagged})`)
   console.log('')
   console.log('GROUND-TRUTH COVERAGE (answerable questions)')
   console.log(`  questions missing a gold memory : ${summary.questionsMissingGold} / ${summary.answerable}`)
   console.log(`  gold memories missed            : ${summary.goldMemoriesMissed} / ${summary.goldMemoriesTotal} (${pct(summary.goldMemoriesMissed, summary.goldMemoriesTotal)})`)
+  console.log(`  measured against the prompt, not the ${previewSkew} shortened response preview(s)`)
   console.log('')
   console.log('NO-ANSWER HONESTY')
   console.log(`  disjoint questions (no topic in archive) : ${summary.noAnswerDisjoint}, honest fallback (model not asked) : ${summary.noAnswerDisjointHonest}`)

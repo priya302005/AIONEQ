@@ -19,7 +19,7 @@
  */
 
 import { config } from '../config/config.js'
-import { embed, chatCompletion } from '../utils/llmClient.js'
+import { embed } from '../utils/llmClient.js'
 import { memoryEmbeddingText, toJsonVector } from '../utils/embeddings.js'
 import { sanitizeExcerpt } from '../utils/promptSafety.js'
 import { findMemoriesForLinks, proposeMemoryLink, listMemoryLinks } from '../models/memoryLink.model.js'
@@ -184,14 +184,17 @@ export async function detectLinks(token, memory) {
 async function classifyWithModel({ memory, candidate }) {
   if (!config.localEnrichMemories) return null
   try {
-    const raw = await chatCompletion({
-      system: 'You compare two notes. Reply with exactly one word.',
-      user: RELATION_PROMPT.replace('{older}', trimForCompare(candidate)).replace('{newer}', trimForCompare(memory)),
-      maxTokens: 8,
-      temperature: 0,
-      timeoutMs: 10_000,
-      retries: 0,
-    })
+    const { generateRelationLabel } = await import('./inferenceService.js')
+    const raw = (
+      await generateRelationLabel({
+        system: 'You compare two notes. Reply with exactly one word.',
+        user: RELATION_PROMPT.replace('{older}', trimForCompare(candidate)).replace('{newer}', trimForCompare(memory)),
+        maxTokens: 8,
+        temperature: 0,
+        timeoutMs: 10_000,
+        retries: 0,
+      })
+    ).text
     const word = String(raw || '').toLowerCase().trim().replace(/[^a-z_]/g, '')
     return LINK_RELATIONS.includes(word) ? word : null
   } catch {

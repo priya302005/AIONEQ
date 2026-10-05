@@ -34,6 +34,13 @@ export const updatePasswordSchema = z.object({
   password: PASSWORD,
 })
 
+// Profile edits. The display name lives in Supabase user_metadata, which is
+// user-writable; the email is deliberately absent because changing it is an
+// identity operation that needs its own confirmation flow.
+export const updateProfileSchema = z.object({
+  fullName: z.string().trim().max(80).optional().default(''),
+})
+
 // ----------------------------------------------------------- memories ------
 export const createMemorySchema = z.object({
   type: z.enum(['voice', 'journal', 'email', 'document', 'story']),

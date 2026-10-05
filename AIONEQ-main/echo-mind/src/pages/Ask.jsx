@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api } from '../api'
+import { api, apiStream } from '../api'
 import { useToast } from '../toast'
 import ConversationSidebar from '../query/components/ConversationSidebar.jsx'
 import ChatThread from '../query/components/ChatThread.jsx'
@@ -109,36 +109,66 @@ function Ask() {
 
     const now = new Date().toISOString()
     const userMsg = { id: uuid(), role: 'user', content: text, citedMemories: [], createdAt: now }
+    const streamId = `stream-${now}`
 
-    setMessages((prev) => [...prev, userMsg])
+    setMessages((prev) => [
+      ...prev,
+      userMsg,
+      // Painted immediately and grown as grounded sentences arrive, so the reply
+      // starts landing in about a second instead of after the whole answer.
+      { id: streamId, role: 'assistant', content: '', citedMemories: [], suggestions: [], createdAt: now, streaming: true },
+    ])
     setSending(true)
     setError('')
 
+    const appendDelta = (chunk) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === streamId ? { ...m, content: `${m.content}${m.content ? ' ' : ''}${chunk}` } : m))
+      )
+    }
+
     try {
-      const res = await api('/api/query', {
-        method: 'POST',
-        body: JSON.stringify({ question: text, conversationId: urlId }),
+      let final = null
+      await apiStream('/api/query/stream', {
+        body: { question: text, conversationId: urlId },
+        onEvent: ({ type, data }) => {
+          if (type === 'delta') appendDelta(data.text)
+          else if (type === 'done') final = data
+          else if (type === 'error') throw new Error(data.message)
+        },
       })
 
-      const assistantMsg = {
-        id: `${res.conversationId || 'local'}-${now}-a`,
-        role: 'assistant',
-        content: res.answer,
-        citedMemories: res.citedMemories || [],
-        // Every memory that informed the answer, so the chat can show what it
-        // drew on even when the model cited only some of them.
-        usedMemories: res.usedMemories || [],
-        suggestions: res.suggestions || [],
-        createdAt: now,
-      }
+      if (!final) throw new Error('The stream ended before an answer arrived.')
 
-      setMessages((prev) => [...prev, assistantMsg])
-      if (res.conversationId) {
-        loadedForId.current = res.conversationId
-        setSearchParams({ c: res.conversationId }, { replace: true })
+      // The streamed text is provisional. `done` is authoritative, so it always
+      // wins - that is what makes a dropped or corrected sentence safe.
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === streamId
+            ? {
+                ...m,
+                content: final.answer,
+                citedMemories: final.citedMemories || [],
+                usedMemories: final.usedMemories || [],
+                suggestions: final.suggestions || [],
+                streaming: false,
+              }
+            : m
+        )
+      )
+      if (final.conversationId) {
+        loadedForId.current = final.conversationId
+        setSearchParams({ c: final.conversationId }, { replace: true })
       }
       refreshConversations()
     } catch (err) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === streamId
+            ? { ...m, content: err.message || 'Something went wrong.', streaming: false, failed: true }
+            : m
+        )
+      )
       setError(err.message)
     } finally {
       setSending(false)

@@ -58,6 +58,38 @@ test('buildContext includes each memory id so citations can be validated', () =>
   assert.ok(ctx.includes(`id: ${UUID_B}`))
 })
 
+test('retrieved memories are presented oldest first, whatever the ranking was', () => {
+  const older = mem({ snippet: 'OLDEST: I signed a lease in Porto.', eventDate: '2024-01-05' })
+  const newer = mem({
+    memoryId: UUID_B,
+    snippet: 'NEWEST: I moved to Lisbon instead.',
+    eventDate: '2026-02-01',
+  })
+  // Retrieval hands them over relevance-ordered (newer first); the prompt must
+  // still read in time order.
+  const ctx = buildContext('where do I live?', { memories: [newer, older] })
+  assert.ok(
+    ctx.indexOf('OLDEST:') < ctx.indexOf('NEWEST:'),
+    'memories were not ordered chronologically for the prompt'
+  )
+})
+
+test('an edited memory is labelled as the corrected version', () => {
+  const edited = mem({
+    updatedAt: '2026-03-09T10:00:00Z',
+    createdAt: '2026-03-04T10:00:00Z',
+  })
+  const ctx = buildContext('q', { memories: [edited] })
+  assert.match(ctx, /edited after it was saved on 2026-03-09/)
+  assert.match(ctx, /corrected version/)
+})
+
+test('a memory that was never edited is not labelled as corrected', () => {
+  const untouched = mem({ createdAt: '2026-03-04T10:00:00Z', updatedAt: '2026-03-04T10:00:00Z' })
+  const ctx = buildContext('q', { memories: [untouched] })
+  assert.equal(ctx.includes('edited after it was saved'), false)
+})
+
 test('buildContext flags an excerpt that is an AI summary, not user prose', () => {
   const ctx = buildContext('q', { memories: [mem({ excerptIsSummary: true, snippet: 'derived text' })] })
   assert.match(ctx, /AI summary - the user did not write this text/)
@@ -111,6 +143,13 @@ test('system prompt forbids inventing a personal detail that no memory supports'
 test('system prompt forbids leaking retrieval internals to the user', () => {
   const sys = buildSystemPrompt({ hasMemories: true })
   assert.match(sys, /Do not expose ids, scores, or any mention of retrieval/i)
+})
+
+test('the model is told how to resolve a correction, not just what to cite', () => {
+  const sys = buildSystemPrompt({ hasMemories: true })
+  assert.match(sys, /listed oldest first/)
+  assert.match(sys, /the later one is the user's current situation/i)
+  assert.match(sys, /Never present an older memory as what is true now/i)
 })
 
 test('without memories the prompt forbids claiming the user said anything', () => {

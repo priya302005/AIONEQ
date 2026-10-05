@@ -100,6 +100,15 @@ export async function saveDerivedMetadata(token, id, payload) {
   return withErrorCapture(clientFor(token).from('memories').update(payload).eq('id', id).select('id,ai_summary,topics,keywords,entities').maybeSingle())
 }
 
+/**
+ * Records which exact text the current AI metadata was derived from, so an
+ * edit that does not change that text can reuse it instead of calling the model
+ * again. A hash only: the note itself is never stored twice.
+ */
+export async function saveAnalysisHash(token, id, analysisHash) {
+  return withErrorCapture(clientFor(token).from('memories').update({ analysis_hash: analysisHash }).eq('id', id).select('id').maybeSingle())
+}
+
 /** Processing bookkeeping. */
 export async function markProcessing(token, id, status, { stage = null, error = null, processedAt = null } = {}) {
   return withErrorCapture(
@@ -130,6 +139,7 @@ export async function resetDerived(token, id) {
         topics: null,
         keywords: null,
         entities: null,
+        analysis_hash: null,
         processing_status: 'pending',
         processing_stage: 'queued',
         processing_error: null,

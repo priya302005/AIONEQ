@@ -1,11 +1,15 @@
 import app from './app.js'
 import { config } from './config/config.js'
-import { assertEnv, assertSafeDefaults } from './config/startup.js'
+import { assertEnv, assertSafeDefaults, warnIfSupabaseUnreachable } from './config/startup.js'
 
 // Fail fast before listening: if required secrets are missing or the LLM is
 // outside localhost, do not serve traffic at all.
 assertEnv()
 assertSafeDefaults()
+
+// Never awaited into the listen path - the server must come up either way.
+// Unhandled rejections kill the process, so the call is explicitly guarded.
+warnIfSupabaseUnreachable().catch(() => {})
 
 // Uncaught failures must kill the process in a vault product, not half-serve.
 process.on('unhandledRejection', (reason) => {

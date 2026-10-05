@@ -55,6 +55,11 @@ process.env.MEMORY_PIPELINE_ENABLED = 'false'
 process.env.LOCAL_ENRICH_MEMORIES = 'false'
 process.env.AUDIT_ENABLED = 'false'
 process.env.CONTEXT_DEBUG = 'false'
+// Pinned OFF so a developer's local .env cannot weaken the grounding suite: the
+// "no relevant memory -> never call the model" guarantee is what these tests
+// exist to prove, and broad recall deliberately calls it in some cases.
+// tests/broadRecall.test.mjs flips config.aiBroadRecallEnabled explicitly.
+process.env.AI_BROAD_RECALL = 'false'
 process.env.NODE_ENV = 'test'
 
 // ------------------------------------------------------------- the stub LLM --

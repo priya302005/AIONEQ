@@ -25,6 +25,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { config } from '../config/config.js'
 import { uploadsDir } from '../middleware/upload.middleware.js'
 import { sanitizeExcerpt } from '../utils/promptSafety.js'
@@ -34,6 +35,7 @@ import {
   markProcessing,
   saveDerivedText,
   saveDerivedMetadata,
+  saveAnalysisHash,
   upsertMemoryVector,
   deleteMemoryVector,
 } from '../models/memory.model.js'
@@ -221,15 +223,18 @@ export async function analyseMemory(token, memory, text) {
   const safeNote = sanitizeExcerpt(note, memory?.id, memory?.user_id, null, config.pipelineMaxChars).text
 
   try {
-    const { chatCompletion } = await import('../utils/llmClient.js')
-    const raw = await chatCompletion({
-      system: 'You extract JSON metadata from a personal note. Answer with valid JSON only.',
-      user: ANALYSIS_PROMPT.replace('{note}', safeNote),
-      maxTokens: 320,
-      temperature: 0.2,
-      timeoutMs: Math.min(config.pipelineTimeoutMs, 15_000),
-      retries: 1,
-    })
+    const { generateMemoryAnalysis } = await import('./inferenceService.js')
+    const raw = (
+      await generateMemoryAnalysis({
+        system: 'You extract JSON metadata from a personal note. Answer with valid JSON only.',
+        user: ANALYSIS_PROMPT.replace('{note}', safeNote),
+        maxTokens: 320,
+        temperature: 0.2,
+        timeoutMs: Math.min(config.pipelineTimeoutMs, 15_000),
+        retries: 1,
+        userId: memory?.user_id || null,
+      })
+    ).text
     const parsed = extractJson(raw)
     if (!parsed) return empty
 
@@ -270,7 +275,50 @@ async function indexMemory(token, memory, metadata) {
   }
 }
 
-// ------------------------------------------------------- orchestration -----
+/**
+ * Fingerprint of the text the AI metadata is derived from.
+ *
+ * An edit that changes the title, the tags or the event date must NOT cost
+ * another model call, because the analysis reads only the note text. Hashing
+ * exactly that text means "same note" is decided by the content itself rather
+ * than by a timestamp. It is a SHA-256, so the stored value cannot be read back
+ * to recover the note.
+ */
+function analysisHash(text) {
+  return crypto.createHash('sha256').update(String(text || '')).digest('hex')
+}
+
+/** The stored metadata is reusable only if it was actually derived from text. */
+function reusableMetadata(memory) {
+  const hasAny =
+    memory?.ai_summary || (memory?.topics?.length ?? 0) || (memory?.keywords?.length ?? 0) || (memory?.entities?.length ?? 0)
+  return hasAny
+    ? {
+        summary: memory.ai_summary || '',
+        topics: Array.isArray(memory.topics) ? memory.topics : [],
+        keywords: Array.isArray(memory.keywords) ? memory.keywords : [],
+        entities: Array.isArray(memory.entities) ? memory.entities : [],
+      }
+    : null
+}
+
+/**
+ * Decides whether the AI metadata step can be skipped.
+ *
+ * Pure, and exported so the rule can be tested without a database: reuse
+ * requires the SAME analysed text AND stored metadata that is actually present.
+ * A different text, a missing hash (an explicit reprocess clears it), or a row
+ * whose metadata was never derived all mean the model must be asked again.
+ *
+ * @returns {{hash: string, reuse: boolean, metadata: object|null}}
+ */
+export function planAnalysis({ text, memory = {} } = {}) {
+  const hash = analysisHash(text)
+  const reuse = Boolean(text) && memory.analysis_hash === hash && reusableMetadata(memory) !== null
+  return { hash, reuse, metadata: reuse ? reusableMetadata(memory) : null }
+}
+
+// ------------------------------------------------------ orchestration -----
 
 /**
  * Runs the full pipeline for one memory. Safe to call repeatedly (idempotent).
@@ -316,10 +364,28 @@ export async function processMemory(token, memory) {
     // ---- stage 2: AI metadata ------------------------------------------
     let metadata = { summary: '', topics: [], keywords: [], entities: [] }
     if (text) {
-      metadata = await analyseMemory(token, working, text)
-      if (metadata.providerError) notes.push('The local AI was unavailable, so this memory was indexed without a summary.')
+      // An edit that leaves the analysed text untouched (a retitled note, a new
+      // event date, a changed tag) reuses the metadata already on the row
+      // instead of paying for the same answer twice. An explicit reprocess
+      // clears analysis_hash, so "process again" always does the work.
+      const plan = planAnalysis({ text, memory })
+
+      if (plan.reuse) {
+        metadata = plan.metadata
+        notes.push('The note text was unchanged, so the existing summary was kept.')
+      } else {
+        metadata = await analyseMemory(token, working, text)
+        if (metadata.providerError) {
+          notes.push('The local AI was unavailable, so this memory was indexed without a summary.')
+        } else {
+          // Only a successful analysis is fingerprinted: a provider failure must
+          // not be cached as if it were the answer.
+          await saveAnalysisHash(token, memory.id, plan.hash).catch(() => {})
+        }
+      }
+
       const hasAny = metadata.summary || metadata.topics.length || metadata.keywords.length || metadata.entities.length
-      if (hasAny) {
+      if (hasAny && !plan.reuse) {
         await saveDerivedMetadata(token, memory.id, {
           ai_summary: metadata.summary || null,
           topics: metadata.topics,

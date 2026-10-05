@@ -98,6 +98,36 @@ test('classifyIntent tags recall, action, and general queries dynamically', () =
   assert.deepEqual(classifyIntent('how do black holes form').labels, [])
 })
 
+// ------------------------------------------------- keyword-free recall --
+test('possessive questions are recall even with no recall keyword', () => {
+  // These are ordinary personal-data questions that RECALL_RE cannot see. They
+  // used to return no intent at all, which disabled the weak-match safety net
+  // and produced "nothing in your memories" for a memory that partially matched.
+  for (const q of [
+    'give me my friend details',
+    'tell me my name',
+    'tell me my life',
+    'what is my dream',
+  ]) {
+    assert.ok(classifyIntent(q).recall, `"${q}" should be classified as recall`)
+  }
+})
+
+test('possessive recall does not make vague queries vague', () => {
+  // `recall` gates the weak-match fallback; `vague` gates whether the current
+  // conversation is force-included. Widening recall must not widen `vague`,
+  // or unrelated conversation history gets pulled into every answer.
+  assert.equal(classifyIntent('give me my friend details').vague, false)
+})
+
+test('non-personal general questions are still unclassified', () => {
+  assert.equal(classifyIntent('how do black holes form').recall, false)
+  assert.equal(classifyIntent('how do black holes form over time').recall, false)
+  // Bare "tell me ..." must not count as recall: a general question should not
+  // pull a weakly-related personal memory into the answer.
+  assert.equal(classifyIntent('tell me how encryption works these days').recall, false)
+})
+
 // ------------------------------------------------- selected sources only --
 test('only the source that actually matches is selected', async () => {
   const memories = [
@@ -354,4 +384,63 @@ test('buildContextPrompt renders None sections when a source is empty', () => {
   assert.ok(prompt.includes('CURRENT CONVERSATION CONTEXT:\nNone yet.'))
   assert.ok(prompt.includes('RELEVANT PREVIOUS CONVERSATIONS:\nNone.'))
   assert.ok(prompt.includes('RELEVANT SAVED MEMORIES:\nNone.'))
+})
+
+// ------------------------------------------- caller-supplied memories kept --
+/*
+ * Regression: the engine used to re-fetch and re-score memories with its own
+ * lexical-only scorer, discarding rows the caller's vector+lexical search had
+ * already accepted. A memory matched semantically at 0.68 but sharing no
+ * literal words with the question scored 0.0 here, was dropped by minScore, and
+ * the model then refused a question it had been given the answer to.
+ */
+test('memories supplied by the caller are trusted, not re-scored', async () => {
+  const client = new FakeClient([], [])
+
+  // Scored upstream by vector+lexical fusion. Its text shares no content word
+  // with the query, so a lexical re-score would return 0 and discard it.
+  const supplied = [
+    {
+      memoryId: 'mem-vector-only',
+      score: 0.68,
+      type: 'journal',
+      snippet: 'Bought a second monitor and rearranged the desk setup.',
+      eventDate: null,
+    },
+  ]
+
+  const pkg = await retrieveContextFrom(client, 'user-a', 'tell me my life', {
+    memories: supplied,
+    minScore: MIN_SCORE,
+  })
+
+  assert.equal(
+    pkg.memories.length,
+    1,
+    'a memory the caller already selected must survive into the prompt'
+  )
+  assert.equal(pkg.memories[0].memoryId, 'mem-vector-only')
+  assert.equal(pkg.memories[0].score, 0.68)
+})
+
+test('caller-supplied memories still respect the limit', async () => {
+  const client = new FakeClient([], [])
+  const supplied = [
+    { memoryId: 'a', score: 0.9, type: 'journal', snippet: 'first', eventDate: null },
+    { memoryId: 'b', score: 0.8, type: 'journal', snippet: 'second', eventDate: null },
+    { memoryId: 'c', score: 0.7, type: 'journal', snippet: 'third', eventDate: null },
+  ]
+
+  const pkg = await retrieveContextFrom(client, 'user-a', 'tell me my life', {
+    memories: supplied,
+    limitMemories: 2,
+    minScore: MIN_SCORE,
+  })
+
+  assert.equal(pkg.memories.length, 2)
+  assert.deepEqual(
+    pkg.memories.map((m) => m.memoryId),
+    ['a', 'b'],
+    'highest-scoring memories must win'
+  )
 })

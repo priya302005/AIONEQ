@@ -1,0 +1,3 @@
+[SECURITY] SIGNED_URL_SECRET is not set; falling back to SUPABASE_ANON_KEY. Set a dedicated long random secret in .env for production.
+[SECURITY] No SCAN_COMMAND configured - uploads are NOT malware-scanned. Set SCAN_COMMAND (e.g. ClamAV) to enable the scan step. In production, set REQUIRE_UPLOAD_SCAN=true to reject unscanned uploads.
+[SECURITY] Supabase auth at https://htrviutftnqlllhpvuxg.supabase.co is NOT reachable (TimeoutError) - signup and login will fail. Start the local stack (`supabase start`) or point SUPABASE_URL at your project.

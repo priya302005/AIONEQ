@@ -523,3 +523,108 @@ production. The two Phase 9 configuration hardenings
 (production `SIGNED_URL_SECRET` enforcement; fail-closed
 upload scanning; secure `access-code` default) are
 implemented, tested, and verified at runtime.
+
+## 14. Phase 10 — unified inference + claim grounding (this round)
+
+No new infrastructure is required to deploy this round, with
+**one exception**: a schema addition (14.1).
+
+### 14.1 Database migration — MUST be applied
+
+`sql/memories.sql` gained one idempotent statement:
+
+```sql
+alter table public.memories
+  add column if not exists analysis_hash text;
+```
+
+Apply it before deploying, or the unchanged-content analysis
+cache cannot be written and the pipeline will log a column
+error on every ingest. Safe to re-run. No data is rewritten
+and no existing row is touched; existing rows have
+`analysis_hash = null` and are therefore analysed once on next
+edit, exactly as before this round.
+
+Rollback: `alter table public.memories drop column if exists
+analysis_hash;` — this only disables the skip; nothing is lost.
+
+### 14.2 Configuration (all optional, defaults preserve behaviour)
+
+| variable | default | effect |
+|---|---|---|
+| `AI_TEMPERATURE` / `AI_TOP_P` / `AI_REPEAT_PENALTY` | prior values | global sampling defaults, overridable per task |
+| `AI_MAX_TOKENS` | prior value | global token ceiling for answers |
+| `AI_CONTEXT_MAX_CHARS` | `6000` | prompt-size budget; the evaluation reports p50/p95 against it |
+| `AI_TIMEOUT_MS` | `20000` | per-request timeout; each task profile may shorten it |
+| `AI_RETRIES` | `1` | retries for transient failures only; `0` is valid |
+| `AI_CLAIM_GROUNDING` | `true` | **see below** |
+| `LOCAL_AI_COMPACT_PROMPT` | `true` | unchanged; routes answers through `/v1/completions` |
+
+**`AI_CLAIM_GROUNDING` is a measurement switch, not a
+feature toggle.** Setting it to `false` is legal in
+development and **refuses to start in production**
+(`src/config/startup.js` exits non-zero). Use it locally to
+reproduce the A/B in AUDIT.md §14.5; do not set it on a
+deployed server — it will not boot.
+
+### 14.3 What changed operationally
+
+- All model traffic now goes through one client with a single
+  error taxonomy. A provider outage surfaces as HTTP 503
+  (rate limited), 502 (unreachable / malformed) or 504
+  (timeout) with an actionable message instead of an
+  unhandled error. Clients may need to retry 503 where they
+  previously would not have seen it.
+- Every model call emits an `ai.inference` metric
+  (task, provider, status, code, attempts, duration, tokens).
+  It contains **no** prompt, answer, memory text or URL.
+- Answers derived from memory are filtered by the claim rules
+  in `src/services/claimGrounding.js`. Expect, by design:
+  - a citation to a memory that was not retrieved is stripped;
+  - an uncited sentence with no lexical support in the
+    supplied excerpts is removed;
+  - if that empties the answer, the user sees an honest
+    "I couldn't build an answer from your memories" instead of
+    a blank bubble.
+  This is intentional. If support tickets report "my answer
+  lost a sentence", §14.5 of AI_MODEL_REPORT.md documents
+  exactly which rule fired and how to measure it.
+- `POST /api/query/:id/ask` responses still include
+  `usedMemories` as a **capped preview** (6 items), not the
+  full retrieved set; the complete set is persisted with the
+  message. Clients must not treat it as exhaustive.
+
+### 14.4 Verification available to you
+
+```
+cd backend
+npm ci                    # lockfile pins 9 top-level ranges exactly
+npm test                  # 258 tests, 253 pass, 0 fail, 5 skipped
+npm run eval:ai           # grounding A/B + fault matrix (stub)
+npm run eval:grounding    # citation + content grounding (stub)
+npm run eval              # retrieval quality (unchanged)
+```
+
+`npm run eval:ai` prints `NOT MEASURED` for live model quality
+unless a provider answers at `LOCAL_AI_BASE_URL`. That is the
+intended behaviour: the report never presents stub numbers as
+model numbers. To get real figures, start the model first and
+re-run.
+
+### 14.5 Remaining owner actions (unchanged from §13, plus)
+
+1. Apply the `analysis_hash` migration (14.1) — **new, required**.
+2. Serve the local model and re-run `npm run eval:ai` to
+   obtain real latency / token / answer-quality figures. Until
+   then, no claim about model behaviour is verified.
+3. All §13 items still stand: isolated-project isolation suite,
+   authenticated staging smoke, real `SIGNED_URL_SECRET`,
+   upload scanner, calibration re-derivation, consent decision.
+
+### 14.6 Release recommendation
+
+**Ready for staging**, conditional on applying 14.1. The
+model-quality dimension of this round is unverified by
+construction (no provider), and live Supabase isolation plus
+the authenticated staging workflow remain **blocking** for
+production.

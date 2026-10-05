@@ -109,10 +109,31 @@ function normalizedPhrase(question) {
   return String(question || '').toLowerCase().replace(/\s+/g, ' ').trim()
 }
 
-/**
- * 0..1 relevance of `question` against an item described by haystack parts.
+/*
+ * Split a question into independent clauses.
+ *
+ * Token coverage is "query tokens found in the memory / total query tokens", so
+ * a longer question scores *lower* for the same match. Measured on a real
+ * failure: the memory scored 0.68 for "tell me my life" but 0.00 for "tell me my
+ * life i given journey my name and i am currently study and my dream are given"
+ * - 3 content tokens vs 17, same memory, opposite outcome. The user had supplied
+ * MORE relevant detail and got LESS recall.
+ *
+ * Scoring each clause independently and keeping the best match removes that
+ * penalty. It cannot manufacture a match: a clause that shares nothing with the
+ * memory still scores 0.
  */
-export function relevanceScore(question, parts) {
+export function queryClauses(question) {
+  const raw = String(question || '')
+  const parts = raw
+    .split(/[?!.;,\n]+|\s(?:and|also|then|plus)\s/i)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  // Nothing to gain from splitting a single clause; also avoids scoring "".
+  return parts.length > 1 ? parts : [raw]
+}
+
+function scoreOneQuestion(question, parts) {
   const qTokens = contentTokens(question)
   if (!qTokens.length) return 0
 
@@ -141,6 +162,22 @@ export function relevanceScore(question, parts) {
   }
 
   return clamp01(score)
+}
+
+/**
+ * 0..1 relevance of `question` against an item described by haystack parts.
+ *
+ * Scores the whole question and each of its clauses, keeping the best: a
+ * detailed question should retrieve at least as well as its most relevant
+ * fragment, not worse than it.
+ */
+export function relevanceScore(question, parts) {
+  let best = 0
+  for (const clause of queryClauses(question)) {
+    const s = scoreOneQuestion(clause, parts)
+    if (s > best) best = s
+  }
+  return best
 }
 
 /** Normalize a bunch of "Item" objects into a comparable text key for dedup. */

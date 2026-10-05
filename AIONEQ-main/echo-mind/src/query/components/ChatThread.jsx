@@ -45,7 +45,7 @@ function ChatThread({ messages, sending, onOpenMemory, onPickFollowUp }) {
           />
         ))
       )}
-      {sending && <TypingIndicator />}
+      {sending && !messages.some((m) => m.streaming) && <TypingIndicator />}
       <div ref={endRef} />
     </div>
   )

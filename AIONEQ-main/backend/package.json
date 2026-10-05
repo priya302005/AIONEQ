@@ -13,6 +13,7 @@
     "smoke": "node scripts/smokeTest.mjs",
     "eval": "node eval/runRetrievalEval.mjs",
     "eval:grounding": "node --experimental-test-module-mocks eval/groundingEval.mjs",
+    "eval:ai": "node --experimental-test-module-mocks eval/aiModelEval.mjs",
     "eval:perf": "node --experimental-test-module-mocks eval/perfEval.mjs",
     "reindex:vectors": "node scripts/reindexVectors.mjs",
     "reindex:check": "node scripts/reindexVectors.mjs --check"

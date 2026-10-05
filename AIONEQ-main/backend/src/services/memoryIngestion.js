@@ -116,7 +116,9 @@ export async function reprocessMemory(token, memoryId) {
   // Clear the fingerprint so an explicit retry always does the work.
   FINGERPRINTS.delete(fingerprint(data))
 
-  const result = await processMemory(token, data)
+  // Likewise clear the analysis fingerprint: "process again" is the user asking
+  // for fresh work, so the pipeline must not short-circuit on unchanged text.
+  const result = await processMemory(token, { ...data, analysis_hash: null })
   return {
     ok: result.status !== PROCESSING_STATUS.FAILED,
     status: result.status,

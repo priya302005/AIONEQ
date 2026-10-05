@@ -1,4 +1,4 @@
-.app {
+﻿.app {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -163,11 +163,16 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  /* The navbar is one straight line. Nothing in it is allowed to wrap or
+     compress, which is what made the link labels break onto two rows. */
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 .nav-logo {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 .logo-badge {
   display: block;
@@ -197,12 +202,18 @@
 .nav-links {
   display: flex;
   gap: 30px;
+  flex-wrap: nowrap;
+  align-items: center;
 }
 .nav-links a {
   font-size: 15px;
   font-weight: 500;
   color: var(--text-muted);
   transition: color 0.2s ease;
+  /* Keeps "How It Works" and "Who It's For" on a single line each instead of
+     folding mid-label once the signed-in actions take up room. */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .nav-links a:hover {
   color: var(--primary);
@@ -211,6 +222,23 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+/* One shared height for every control in this row. Each button and the account
+   chip carried their own padding, so the Dashboard action rendered a couple of
+   pixels shorter than its neighbours and the signed-in row read as misaligned.
+   Driving them off the height the buttons already had keeps them identical. */
+.nav-actions > button,
+.nav-actions .btn-nav {
+  height: 40px;
+  padding: 0 16px;
+  align-items: center;
+  white-space: nowrap;
+}
+.nav-actions .nav-user {
+  height: 40px;
+  padding: 0 12px 0 6px;
 }
 
 /* ===================== HERO ===================== */
@@ -869,6 +897,16 @@
 }
 
 /* ===================== RESPONSIVE ===================== */
+/* Signed in, the row carries logo + 5 links + Dashboard + account chip +
+   Security + Log Out. Below this width that no longer fits beside 32px page
+   padding, so shed the display name and tighten the links rather than let
+   anything wrap onto a second line. */
+@media (max-width: 1200px) {
+  .nav-links { gap: 20px; }
+  .nav-links a { font-size: 14px; }
+  .nav-actions .nav-username { display: none; }
+}
+
 @media (max-width: 1024px) {
   .nav-links { display: none; }
   .hero-title { font-size: 42px; }
@@ -891,6 +929,12 @@
   .float-chip { display: none; }
   .footer-top { flex-direction: column; gap: 32px; }
   .footer-links { flex-direction: column; gap: 32px; }
+  /* Keep the way back to the dashboard reachable: drop the display name so
+     Dashboard, the avatar, Security and Log Out still fit on one line. Only the
+     horizontal padding changes, so the shared height holds. */
+  .nav-actions .nav-username { display: none; }
+  .nav-actions > button,
+  .nav-actions .btn-nav { padding: 0 12px; }
 }
 
 /* ===================== AUTH ===================== */
@@ -1150,6 +1194,46 @@
   font-weight: 600;
   color: var(--text-primary);
 }
+/* The chip is the profile entry point. It stays one control of the same size,
+   so making it clickable adds no width to the navbar row. */
+.nav-user-link {
+  cursor: pointer;
+  font: inherit;
+}
+.nav-user-link:hover .nav-username {
+  color: var(--primary);
+}
+
+/* ===================== PROFILE ===================== */
+.profile-id {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.profile-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f97316, #ea580c);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+.profile-id-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.profile-id-text strong {
+  font-family: var(--font-heading);
+  font-size: 17px;
+}
 
 /* ===================== DASHBOARD ===================== */
 .dashboard-wrap {
@@ -1393,6 +1477,28 @@
 
 .btn-pill {
   border-radius: 50px;
+}
+
+/* A row of controls sitting inside a form. btn-cta is sized for a hero
+   (17px type, 16px padding) and btn-ghost for a compact control (15px, 10px),
+   so mixed together they end up visibly different heights. One height and one
+   baseline for the whole row, whichever buttons are in it. */
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.form-actions .btn-cta,
+.form-actions .btn-ghost,
+.form-actions .btn-pill {
+  height: 44px;
+  padding: 0 22px;
+  font-size: 15px;
+  align-items: center;
+}
+.form-actions .auth-link {
+  margin-left: auto;
 }
 
 .dropzone {
@@ -3008,4 +3114,31 @@
   transform: translateX(20px);
   background: var(--primary);
   border-color: var(--primary);
+}
+/* Streaming reply caret. Shown only while grounded sentences are still
+   arriving, so a half-finished answer is never read as a finished one. */
+.stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: streamCaret 1s steps(2, start) infinite;
+}
+
+@keyframes streamCaret {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stream-caret {
+    animation: none;
+  }
 }

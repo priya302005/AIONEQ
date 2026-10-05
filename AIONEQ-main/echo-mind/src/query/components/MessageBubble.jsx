@@ -31,7 +31,12 @@ function MessageBubble({ message, isLast, onOpenMemory, onPickFollowUp }) {
       <div className="msg-avatar">◆</div>
       <div className="msg-stack">
         <div className={`msg-bubble ai${noSource ? ' no-source' : ''}`}>
-          <p className="msg-text">{message.content}</p>
+          <p className="msg-text">
+            {message.content}
+            {/* Caret while sentences are still arriving, so an unfinished
+                reply is never mistaken for a finished one. */}
+            {message.streaming && <span className="stream-caret" aria-hidden="true" />}
+          </p>
           {message.createdAt ? (
             <span className="msg-time">{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
           ) : null}

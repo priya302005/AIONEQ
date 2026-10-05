@@ -357,6 +357,47 @@ test('conversation ownership is enforced before any question is answered', async
   assert.equal(result.body.success, false)
 })
 
+test('the claim layer is gated by AI_CLAIM_GROUNDING on both ask paths', async () => {
+  const { config } = await import('../src/config/config.js')
+  store.reset()
+  const memory = mem({ title: 'Real note', content: 'I adopted a dog named Biscuit.' })
+  store.memories.push(memory)
+
+  // An uncited invention with nothing in common with the archive.
+  const fab = 'You also spent the summer in Lisbon teaching at a language school.'
+  setStubBehavior(() => `Biscuit is a good dog (cite: ${memory.id}). ${fab}\n---FOLLOW-UPS---\n1) a?`)
+
+  const savedCompact = config.localAiCompactPrompt
+  const savedGrounding = config.aiClaimGroundingEnabled
+  try {
+    for (const compact of [false, true]) {
+      config.localAiCompactPrompt = compact
+
+      config.aiClaimGroundingEnabled = true
+      store.conversations = []
+      const on = await runAsk({ userId: USER_A, question: 'my dog' })
+      assert.equal(
+        on.body.answer.includes('Lisbon'),
+        false,
+        `compact=${compact}: the fabrication survived with the layer on`
+      )
+
+      config.aiClaimGroundingEnabled = false
+      store.conversations = []
+      const off = await runAsk({ userId: USER_A, question: 'my dog' })
+      assert.equal(
+        off.body.answer.includes('Lisbon'),
+        true,
+        `compact=${compact}: the flag was ignored, so the A/B cannot be measured`
+      )
+    }
+  } finally {
+    config.localAiCompactPrompt = savedCompact
+    config.aiClaimGroundingEnabled = savedGrounding
+    setStubBehavior(null)
+  }
+})
+
 test('the model can be asked to misbehave and citations are still filtered', async () => {
   store.reset()
   const memory = mem({ title: 'Real note', content: 'I adopted a dog named Biscuit.' })

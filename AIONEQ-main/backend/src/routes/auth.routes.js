@@ -6,6 +6,7 @@ import {
   resetPassword,
   updatePassword,
   getProfile,
+  updateProfile,
   mfaEnroll,
   mfaChallenge,
   mfaVerify,
@@ -14,7 +15,7 @@ import {
 } from '../controllers/auth.controller.js'
 import { requireAuth } from '../middleware/auth.middleware.js'
 import { authLimiter } from '../middleware/rateLimit.middleware.js'
-import { validate, signupSchema, loginSchema, resetPasswordSchema, updatePasswordSchema } from '../validation/schemas.js'
+import { validate, signupSchema, loginSchema, resetPasswordSchema, updatePasswordSchema, updateProfileSchema } from '../validation/schemas.js'
 
 const router = Router()
 
@@ -27,6 +28,7 @@ router.post('/reset-password', authLimiter, validate(resetPasswordSchema), reset
 // Authenticated flows.
 router.put('/update-password', requireAuth, validate(updatePasswordSchema), updatePassword)
 router.get('/me', requireAuth, getProfile)
+router.patch('/me', requireAuth, validate(updateProfileSchema), updateProfile)
 
 // MFA management (always require an authenticated session).
 router.post('/mfa/enroll', requireAuth, mfaEnroll)

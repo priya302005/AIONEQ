@@ -16,6 +16,7 @@ import json
 import math
 import os
 import random
+import re
 import sys
 import time
 import urllib.request
@@ -45,23 +46,85 @@ def ensure_stories(data_dir, download_ok):
     return path
 
 
-def build_text(data_dir, max_chars_stories, download_ok):
-    pieces = []
+def split_memory_blocks(text):
+    """Split a personal corpus into one block per memory.
+
+    Blocks start with the "=== TYPE | date | title ===" header written by
+    export_memories.sql, so a whole memory can be held out of training instead
+    of being sliced mid-sentence by a character-offset split.
+    """
+    parts = re.split(r'(?m)^(?====\s)', text.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def repeat_blocks(blocks, times):
+    """Repeat whole memories so they are a real share of the token stream.
+
+    Personal data is kilobytes next to megabytes of TinyStories. Appended once
+    it is ~0.001% of the corpus and the model learns nothing about the user.
+    """
+    out = []
+    for _ in range(max(1, times)):
+        out.extend(blocks)
+    return out
+
+
+def build_corpus(data_dir, max_chars_stories, download_ok, mem_repeat, val_frac):
+    """Return {train, val, stats}.
+
+    Personal memories are split by whole memory: some train, some are held out
+    so val loss actually measures "can it recall something it never saw".
+    """
     story_path = ensure_stories(data_dir, download_ok)
+    stories = ''
     if story_path:
         with open(story_path, 'r', encoding='utf-8', errors='ignore') as f:
-            text = f.read()
-        pieces.append(text[:max_chars_stories])
+            stories = f.read()[:max_chars_stories]
+
     mem_path = os.path.join(data_dir, 'memories.txt')
+    blocks = []
     if os.path.exists(mem_path):
         with open(mem_path, 'r', encoding='utf-8', errors='ignore') as f:
-            mem = f.read().strip()
-        if mem:
-            pieces.append(f'{EOT}\n=== MY MEMORIES ===\n{mem}')
-    if not pieces:
-        print('No data found. Drop your personal texts in llm/data/memories.txt and/or allow the story download.')
+            blocks = split_memory_blocks(f.read())
+
+    # Hold out whole memories. With a single memory there is nothing meaningful
+    # to hold out, so val falls back to the story tail.
+    n_val = int(round(len(blocks) * val_frac))
+    if len(blocks) >= 2:
+        n_val = max(1, min(n_val, len(blocks) - 1))
+    else:
+        n_val = 0
+    val_blocks = blocks[len(blocks) - n_val:] if n_val else []
+    train_blocks = blocks[: len(blocks) - n_val] if n_val else blocks
+
+    train_mem = repeat_blocks(train_blocks, mem_repeat)
+    train_pieces = ([stories] if stories else []) + ([f'{EOT}\n' + '\n\n'.join(train_mem)] if train_mem else [])
+    train_text = '\n\n'.join(train_pieces)
+
+    if val_blocks:
+        val_text = f'{EOT}\n' + '\n\n'.join(val_blocks)
+        val_kind = 'held-out memories'
+    else:
+        val_text = stories[-max(200_000, len(stories) // 50):] if stories else ''
+        val_kind = 'story tail (no memory held out)'
+
+    if not train_text.strip():
+        print('No data found. Put your exported memories in llm/data/memories.txt '
+              'and/or allow the story download.')
         sys.exit(1)
-    return '\n\n'.join(pieces)
+
+    train_chars_mem = sum(len(b) for b in train_mem)
+    stats = {
+        'stories_chars': len(stories),
+        'memories': len(blocks),
+        'train_memories': len(train_blocks),
+        'val_memories': len(val_blocks),
+        'repeat': mem_repeat,
+        'mem_chars_in_train': train_chars_mem,
+        'mem_share_pct': (100.0 * train_chars_mem / len(train_text)) if train_text else 0.0,
+        'val_kind': val_kind,
+    }
+    return {'train': train_text, 'val': val_text, 'stats': stats}
 
 
 # ------------------------------------------------------------- tokenizer ------
@@ -175,6 +238,10 @@ def main():
     ap.add_argument('--no-download', action='store_true', help='skip downloading TinyStories')
     ap.add_argument('--quick', action='store_true', help='tiny settings for a fast validation run')
     ap.add_argument('--max-chars', type=int, default=20_000_000, help='stories bytes cap (CPU bound)')
+    ap.add_argument('--mem-repeat', type=int, default=40,
+                    help='how many times personal memories are repeated in training')
+    ap.add_argument('--val-frac', type=float, default=0.15,
+                    help='fraction of whole memories held out for validation')
     ap.add_argument('--vocab', type=int, default=4096, help='BPE vocab size (ignored for char mode)')
     ap.add_argument('--steps', type=int, default=3000)
     ap.add_argument('--batch-size', type=int, default=16)
@@ -202,14 +269,31 @@ def main():
     os.makedirs(args.data_dir, exist_ok=True)
     os.makedirs(args.out_dir, exist_ok=True)
 
-    text = build_text(args.data_dir, args.max_chars, not args.no_download)
-    tok = make_tokenizer(text, args.vocab, args.out_dir)
-    print(f'corpus chars: {len(text):,}')
+    corpus = build_corpus(args.data_dir, args.max_chars, not args.no_download,
+                          args.mem_repeat, args.val_frac)
+    st = corpus['stats']
+    print(f"corpus chars: train={len(corpus['train']):,} val={len(corpus['val']):,}")
+    print(f"  stories        : {st['stories_chars']:,} chars")
+    print(f"  memories       : {st['memories']} total -> {st['train_memories']} train / {st['val_memories']} held out")
+    print(f"  repeat         : x{st['repeat']}")
+    print(f"  memory share   : {st['mem_share_pct']:.2f}% of training text")
+    print(f"  val source     : {st['val_kind']}")
+    if st['memories'] and st['mem_share_pct'] < 5.0:
+        print(f"  WARNING: memories are only {st['mem_share_pct']:.2f}% of the corpus. "
+              f"Raise --mem-repeat or lower --max-chars so the model actually sees them.")
 
-    raw = encode_corpus(text, tok, args.block_size)
-    n = int(0.98 * len(raw))
-    data = {'train': raw[:n], 'val': raw[n:]}
-    print(f'tokens: train={len(data["train"]):,} val={len(data["val"]):,}')
+    # Tokenize each split on its own text. A single 98% character offset would
+    # put every memory in val (they are at the end of the corpus) and measure
+    # nothing.
+    tok = make_tokenizer(corpus['train'] + '\n\n' + corpus['val'], args.vocab, args.out_dir)
+
+    data = {
+        'train': encode_corpus(corpus['train'], tok, args.block_size),
+        'val': encode_corpus(corpus['val'], tok, args.block_size),
+    }
+    if len(data['val']) < 4:
+        print('WARNING: validation split is tiny; val loss will be noisy.')
+    print(f"tokens: train={len(data['train']):,} val={len(data['val']):,}")
 
     cfg = ModelConfig(vocab_size=tok.vocab_size, block_size=args.block_size,
                       n_layer=args.n_layer, n_head=args.n_head, n_embd=args.n_embd)

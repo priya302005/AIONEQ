@@ -556,3 +556,184 @@ the authenticated staging workflow (isolated project +
 `API_TOKEN` + running LLM) remain and are **blocking** for
 production. See DEPLOYMENT.md §13 for the full report and
 remaining owner actions.
+
+## 14. Phase 10 — unified inference + claim grounding (this round)
+
+**Scope:** one place that decides how a model is called, and
+one rule set that decides whether an answer is allowed to
+claim anything. No new provider, no new vector space, no
+consent-default change, no destructive operation.
+
+### 14.1 Unified inference (executed)
+
+`src/utils/llmClient.js` is now the only code that speaks
+HTTP to the model. It gained configurable sampling,
+`Retry-After` that is honoured but bounded, retries for
+transient failures only, an explicit error taxonomy, and
+envelope validation (a 200 that is not a completion is an
+error, never an empty answer). `completeResult()` surfaces
+usage and finish reason; `complete()`/`chatCompletion()`/
+`textCompletion()` still return plain strings, so no caller
+had to change its contract.
+
+`src/services/inferenceService.js` wraps that with per-task
+profiles (`memory_analysis`, `memory_summary`,
+`question_answer`, `personalization`, `memory_relation`).
+Each profile carries the parameters the old call sites had
+hard-coded, so behaviour is preserved while being stated in
+one readable table. Every call emits an `ai.inference`
+metric carrying task, provider, status, error code, attempt
+count, duration and token counts — **no prompt, answer,
+memory text or URL**. That is asserted by a test, not by
+convention.
+
+### 14.2 Claim grounding (executed)
+
+`src/services/claimGrounding.js` applies three rules to a
+memory-backed answer:
+
+- **R1** a citation to an id that was not supplied is
+  deleted from the text and never returned;
+- **R2** a surviving citation keeps its sentence, including a
+  paraphrase of its own source — deletion would silently
+  remove *correct* answers. A cited sentence with little
+  lexical agreement is counted as a **weak attribution**
+  (measured and reported) instead of being dropped;
+- **R3** an uncited assertion with no lexical evidence in the
+  supplied excerpts is removed.
+
+A citation marker also **ends** the unit it belongs to. Without
+that boundary, a model that runs several quoted excerpts
+together can smuggle an uncited fabrication through on a
+neighbouring citation's authority — found by the new
+evaluation, then closed, with a regression test
+(`tests/aiInference.test.mjs`, "an uncited fabrication cannot
+hide behind a citation in the same run").
+
+Fully filtered answers become an honest sentence, never an
+empty bubble. Audit entry `query.grounding_adjusted` records
+counts only. Both ask paths are gated by the same
+`AI_CLAIM_GROUNDING` flag — compact is the recommended
+production route, so a flag that applied only to the full path
+would have measured a configuration nobody deploys
+(`tests/grounding.test.mjs` pins both).
+
+**Not verifiable without a model, and therefore not claimed:**
+whether these rules keep a real 3B model's *prose* intact.
+The trade-off is documented, not hidden: R2 over-keeps
+(cited text is trusted) and R3 is lexical, not semantic.
+
+### 14.3 Production cannot serve an ungrounded answer
+
+`AI_CLAIM_GROUNDING=false` exists so the evaluation can
+measure the ungrounded rate. `src/config/startup.js` now
+**refuses to start in production** with that combination, so a
+deployed server can never serve ungrounded answers. Tested at
+runtime, not asserted in prose.
+
+### 14.4 Prompt chronology and analysis reuse (executed)
+
+- Memories are presented **oldest first** with corrections
+  labelled as current, so a small model applies the latest
+  state rather than the first thing it reads. The prior
+  ordering was not obviously wrong, but nothing about
+  recency is signalled to the model at all.
+- `memories.analysis_hash` (SHA-256 of the derived-analysis
+  inputs) lets an unchanged memory skip re-analysis. An
+  explicit user request to reprocess **always** re-runs —
+  the user's intent beats the cache. A **failed** analysis is
+  not fingerprinted, so a provider outage cannot poison the
+  archive into "already analysed".
+
+### 14.5 Commands executed and results (all real)
+
+| command | result |
+|---|---|
+| `npm test` | **258 tests — 253 pass, 0 fail, 5 skipped** (was 255/250/0/5 before this round) |
+| `npm run eval:ai` (new) | see below |
+| `npm run eval:grounding` | 54 questions, 42 cited model calls, **0** hallucinated ids survived, **0/54** unsupported claims, 0 unsupported sentences, 0/51 stub probes survived, grader self-test PASS, 13/43 answerable questions missing a gold memory |
+| `npm run eval` (retrieval) | unchanged: hybrid hit@5 **81.4%**, top1 **53.5%**, recall@5 **0.757**, MRR **0.644**, **0** cross-user leaks |
+
+**`npm run eval:ai` — grounding A/B, same corpus, same
+deterministic stub, layer on vs off:**
+
+| | unsupported questions | unsupported sentences | fabricated ids |
+|---|---|---|---|
+| `AI_CLAIM_GROUNDING=on` | **0 / 54** | **0** | 0 |
+| `AI_CLAIM_GROUNDING=off` | 51 / 54 | 145 | 0 |
+| prevented by the layer | 51 | 145 | 0 |
+
+Fabricated **ids** are 0 in both arms: the pre-existing id
+filter already stopped those. The layer's contribution is
+entirely on *content* — which is the honest reading.
+
+Also measured: prompt size min 2876 / p50 4153 / p95 4755 /
+max 4904 chars against the 6000-char limit (**0** over
+limit); 0-8 memories per question against the cap of 8; and
+a seven-case fault matrix — healthy, 429 (2 attempts, HTTP
+503), 500 (2 attempts), 400 (1 attempt, no retry), a 200 that
+is not a completion (502), a slow model (504), and an
+unreachable port (502) — each mapped to the intended error
+code.
+
+**Live model quality: NOT MEASURED.** No provider answered at
+the configured local URL, so latency, token use and answer
+quality for a real model are **absent from this report**
+rather than estimated. The numbers above measure the pipeline
+contract under a stub.
+
+### 14.6 Two measurement defects found and fixed
+
+Reporting these because both had produced flattering numbers:
+
+1. **The grounding eval measured the wrong set.** It compared
+   citations and gold memories against the response body's
+   `usedMemories`, which is a **UI-sized preview** (capped),
+   not everything retrieved. Any memory beyond the preview was
+   reported as a miss, and any honest citation to one was
+   reported as fabricated — 41 "hallucinated ids survived".
+   Both are now measured against the ids actually supplied to
+   the model. Missing-gold fell 16/43 → 13/43 as a result.
+2. **The grader graded coarser units than the layer decides
+   on**, so an uncited fragment passed on vocabulary that only a
+   cited neighbour supplied. Both now split on the same
+   boundaries. The harness stub also no longer truncates
+   quotes mid-word (`the old o`), which was an artefact of the
+   clipper, not model behaviour.
+
+Both evaluations now carry a **self-test** that asserts the
+grader still flags a known-unsupported sentence, accepts a
+cited one, and rejects a fabricated id. A clean report from a
+broken grader is no longer possible.
+
+### 14.7 Limitations (unchanged honesty)
+
+- **No live model was measured.** Nothing here says a 3B model
+  reads these prompts well, or that its answers survive R2/R3
+  intact. That needs a running provider.
+- **R2 over-trusts cited text**, and **R3 is lexical**: a
+  paraphrase with unusual vocabulary can be removed. Weak
+  attributions are counted so the rate is visible, not hidden.
+- Live Supabase isolation and the authenticated staging
+  workflow remain **blocking** for production, as in §13.
+- `npm audit` reports 2 moderate-severity dependency
+  advisories; no forced/breaking upgrade was attempted.
+- `package-lock.json` was rewritten by `npm install`, pinning
+  the nine top-level ranges to the versions already installed.
+  No resolved package version changed.
+
+### 14.8 Files added / changed (this round)
+
+Added: `src/services/inferenceService.js`,
+`src/services/claimGrounding.js`,
+`tests/aiInference.test.mjs`, `eval/aiModelEval.mjs`.
+Changed: `src/utils/llmClient.js`, `src/config/config.js`,
+`src/config/startup.js`, `src/controllers/query.controller.js`,
+`src/services/memoryContext.js`, `src/services/memoryPipeline.js`,
+`src/services/memoryIngestion.js`, `src/services/memoryLinks.js`,
+`src/models/memory.model.js`, `sql/memories.sql`, `.env.example`,
+`eval/groundingEval.mjs`, `package.json`,
+`tests/grounding.test.mjs`, `tests/memoryContext.test.mjs`,
+`tests/pipeline.test.mjs`, `tests/configValidation.test.mjs`.
+Docs: `AI_MODEL_REPORT.md`, this section, `DEPLOYMENT.md` §14.
+

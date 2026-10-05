@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import {
   askQuestion,
+  askQuestionStream,
   getConversationsController,
   getConversationController,
   deleteConversationController,
@@ -13,6 +14,8 @@ import { validate, askSchema, renameConversationSchema, idParamSchema } from '..
 const router = Router()
 
 router.post('/', requireAuth, askRateLimiter, validate(askSchema), askQuestion)
+// Streaming Ask. Same guard rails, progressive delivery.
+router.post('/stream', requireAuth, askRateLimiter, validate(askSchema), askQuestionStream)
 router.get('/conversations', requireAuth, getConversationsController)
 router.get('/conversations/:id', requireAuth, validate(idParamSchema, 'params'), getConversationController)
 router.patch('/conversations/:id', requireAuth, validate(idParamSchema, 'params'), validate(renameConversationSchema), renameConversationController)

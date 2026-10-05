@@ -23,10 +23,12 @@
         build-time secret, so the exact origin cannot be listed here).
       - script-src is strict ('self'); Vite dev re-adds 'unsafe-inline' for the
         react-refresh preamble via the CSP plugin in vite.config.js.
+      - worker-src 'self' blob: is scoped to workers only, so Vite's dev HMR
+        worker can start without widening script-src.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; base-uri 'self'; object-src 'none'; frame-src 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: https: http://localhost:4000; connect-src 'self' ws://localhost:5173 wss: https: http://localhost:4000;"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; frame-src 'none'; form-action 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: https: http://localhost:4000; connect-src 'self' ws://localhost:5173 wss: https: http://localhost:4000;"
     />
   </head>
   <body>
