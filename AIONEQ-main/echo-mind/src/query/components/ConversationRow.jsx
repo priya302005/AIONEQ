@@ -55,6 +55,11 @@ function ConversationRow({
             )}
           </div>
           <span className="convo-item-time">{timeAgo(conversation.updatedAt)}</span>
+          {/* Shown only while searching: the line that actually matched, so a
+              body hit is distinguishable from a title hit. */}
+          {conversation.match === 'message' && conversation.preview && (
+            <span className="convo-item-preview">{conversation.preview}</span>
+          )}
           {menuOpen && (
             <div className="convo-menu" onClick={(e) => e.stopPropagation()}>
               <button type="button" className="convo-menu-item" onClick={() => onRenameStart(conversation)}>

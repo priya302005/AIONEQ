@@ -175,7 +175,8 @@ export function buildSystemPrompt({ hasMemories, hasHistory, ambiguity = false, 
     rules.push(
       'Ground every personal claim in a retrieved memory, and cite the memory immediately after the relevant sentence as (cite: <memory id>) using the exact id shown in its block.',
       'The memories are listed oldest first, and a memory marked "edited after it was saved" is the user correcting themselves. When two memories disagree, the later one is the user\'s current situation: answer with the later one, and mention the earlier one only when the change itself is what was asked about. Never present an older memory as what is true now.',
-      'Clearly separate what the user told you from what you think it might mean. Use wording like "from what you shared..." for the first and "that may be one reason..." or "it\'s possible..." for the second. Never state your interpretation as something the user said.',
+      'Clearly separate what the user told you from what you think it might mean. Mark your own interpretation with "that may be one reason..." or "it\'s possible...", never with the user\'s voice. Never state your interpretation as something the user said.',
+      'Start with the answer itself. Do not open with "from what you shared", "based on what you told me" or similar sourcing preambles - just answer.',
       'Only claim something is a fact if a retrieved memory states it. If the memories do not contain a specific detail - a name, a date, a decision, a place - say plainly that you could not find it in their saved memories. Do not guess, and do not invent even a plausible detail.',
       'Refer to the memory\'s type and date when it adds meaning ("in your journal entry from March...", "in that voice note..."). Do not expose ids, scores, or any mention of retrieval, ranking, embeddings or vector search.',
       'Use a memory as context for the user\'s current situation rather than as the final answer.'
@@ -277,6 +278,29 @@ export function splitFollowUps(raw, maxSuggestions = 3) {
  */
 const CITATION_RE = /\(cite:\s*([0-9a-fA-F-]{36})\)|\[([0-9a-fA-F-]{36})\]/g
 
+/**
+ * Turns a streaming failure into something the user can act on.
+ *
+ * A bare "could not complete the answer" is unactionable. Nearly all of these
+ * failures are the local model server being down, so name that and say how to
+ * fix it instead of hiding behind a generic message.
+ */
+export function streamFailureMessage(err) {
+  const raw = String(err?.cause?.code || err?.code || err?.message || err || '')
+  const down =
+    /ECONNREFUSED|ECONNRESET|EPIPE|ENOTFOUND|EHOSTUNREACH|fetch failed/i.test(raw)
+  if (down) {
+    return 'The local model server is not running, so the answer could not start. Start it (llm_server.py on port 4891) and try again.'
+  }
+  if (/timeout|aborted/i.test(raw)) {
+    return 'The model took too long to respond and the answer was cut off. Try again, or a shorter question.'
+  }
+  if (/EMPTY_STREAM/.test(raw)) {
+    return 'The model server answered with an empty response, so there was nothing to stream. Try again.'
+  }
+  return 'Could not complete the answer.'
+}
+
 export function extractCitedIds(text, available) {
   const ids = new Set()
   const availableSet = new Set(available.map((m) => m.memoryId))
@@ -288,6 +312,56 @@ export function extractCitedIds(text, available) {
     if (availableSet.has(id)) ids.add(id)
   }
   return [...ids].map((id) => byId.get(id)).filter(Boolean)
+}
+
+/**
+ * Removes the attribution opener the model adds before its first sentence.
+ *
+ * The system prompt asks for "from what you shared..." wording to keep stored
+ * facts separate from interpretation, which is the right idea but reads badly
+ * once it becomes the opening line of every reply. The prompt still asks for
+ * that wording for interpretation, so this only strips the prefix when the
+ * sentence that follows makes a claim or a refusal - never mid-sentence, never
+ * from a later sentence, and never in a way that can drop a citation.
+ */
+const ATTRIBUTION_OPENERS = [
+  'from what you have shared with me',
+  'from what you have shared',
+  'from what you told me earlier',
+  'from what you told me',
+  'from what you shared earlier',
+  'from what you shared',
+  'based on what you have shared with me',
+  'based on what you have shared',
+  'based on what you told me',
+  'based on what you shared',
+  'according to your memories',
+  'from your memories',
+  'from your saved memories',
+]
+
+export function stripAttributionOpener(text) {
+  const raw = String(text || '')
+  if (!raw) return raw
+  const trimmed = raw.trimStart()
+  // Only the opening of the whole answer is a candidate.
+  if (!/^[*_"'`(\[]*\s*(?:well[,.]?\s+|so[,.]?\s+|ok(?:ay)?[,.]?\s+)?(based on|according to|from)\b/i.test(trimmed)) {
+    return raw
+  }
+  const LEADING_FILLER = '[*_"`(\\[\\s]*(?:well[,.]?\\s+|so[,.]?\\s+|ok(?:ay)?[,.]?\\s+)?'
+  for (const opener of ATTRIBUTION_OPENERS) {
+    const match = trimmed.match(new RegExp(`^${LEADING_FILLER}${opener}[,:]?\\s*`, 'i'))
+    if (!match) continue
+    const rest = trimmed.slice(match[0].length)
+    // Refuse to strip when what remains is empty, or is only punctuation: that
+    // would swallow a refusal such as "From what you shared, ..." with nothing
+    // usable behind it.
+    if (!rest || !/[A-Za-z0-9]/.test(rest)) return raw
+    // Removing the opener can strand the first letter lowercased ("From what
+    // you shared, your name..."). Restore it so the answer reads naturally.
+    return /^[a-z]/.test(rest) ? rest.charAt(0).toUpperCase() + rest.slice(1) : rest
+  }
+  return raw
 }
 
 /** Formats an evolution link for the prompt, e.g. "memory B (2026-03) is an earlier version of memory A". */

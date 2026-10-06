@@ -33,6 +33,8 @@ import {
   splitFollowUps,
   extractCitedIds,
   noContextAnswer,
+  stripAttributionOpener,
+  streamFailureMessage,
   noContextAnswerShort,
   relayRetrievedMemories,
   formatLinks,
@@ -322,7 +324,7 @@ export const askQuestion = asyncHandler(async (req, res) => {
         return res.status(failure.status).json({ success: false, message: failure.message })
       }
 
-      const parsed = splitFollowUps(raw)
+      const parsed = splitFollowUps(stripAttributionOpener(raw))
 
       // Sentence-level grounding: a valid citation is kept, a fabricated id is
       // deleted from the text, and an uncited assertion with no support in the
@@ -342,7 +344,7 @@ export const askQuestion = asyncHandler(async (req, res) => {
           })
         : { ...UNCHANGED_GROUNDING, answer: parsed.answer }
 
-      answer = grounded.answer
+      answer = stripAttributionOpener(grounded.answer)
       suggestions = parsed.suggestions
 
       // Broad recall asked the model to judge relevance from unranked memories.
@@ -546,8 +548,10 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
 
     const sentences = createSentenceStream()
     const released = []
+    let sawDelta = false
     for await (const delta of chatCompletionStream({ system, user })) {
       if (!alive()) break
+      if (delta) sawDelta = true
       for (const sentence of sentences.push(delta)) {
         const graded = groundAnswer({
           answer: sentence,
@@ -573,6 +577,16 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
       }
     }
 
+    // An empty stream that never errored means the model produced nothing at
+    // all. Without this check the client got a clean finish with no answer and
+    // reported "the stream ended before an answer arrived", which looks like an
+    // app bug instead of an unreachable model server.
+    if (!sawDelta && !released.length) {
+      throw Object.assign(new Error('local AI stream produced no frames'), {
+        code: 'EMPTY_STREAM',
+      })
+    }
+
     const streamed = released.join(' ').trim()
     // Authoritative pass over exactly what was shown, so the client ends up
     // with the same answer, citations and suggestions the non-streaming route
@@ -591,7 +605,7 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
         ? noContextAnswer()
         : final.answer
 
-    const parsed = splitFollowUps(answer)
+    const parsed = splitFollowUps(stripAttributionOpener(answer))
     const citedList = extractCitedIds(parsed.answer, memories).slice(0, CITATION_MAX)
     const citedPayload = citedList.map((id) => {
       const m = memories.find((x) => x.memoryId === id)
@@ -632,7 +646,12 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
     })
   } catch (err) {
     // Headers are already sent, so the error has to travel as an event.
-    send('error', { message: 'Could not complete the answer.' })
+    //
+    // The most common cause by far is the local model server not running: the
+    // fetch throws ECONNREFUSED before any frame arrives, and reporting only
+    // "could not complete" left the user with no idea what to start. Say what
+    // actually failed.
+    send('error', { message: streamFailureMessage(err) })
   } finally {
     if (!res.writableEnded) res.end()
   }
@@ -765,19 +784,43 @@ async function loadEvolutionLinks(req, memories) {
 // ------------------------------------------------- conversation CRUD -------
 
 export const getConversationsController = asyncHandler(async (req, res) => {
-  const { data, error } = await listConversations(req.accessToken)
-  if (error) {
-    if (isMissingConversationsTable(error.message)) {
-      return res.json({ success: true, data: [] })
+const { data, error } = await listConversations(req.accessToken, {
+      search: req.query?.q || '',
+    })
+    if (error) {
+      if (isMissingConversationsTable(error.message)) {
+        return res.json({ success: true, data: [] })
+      }
+      return res.status(400).json({ success: false, message: error.message })
     }
-    return res.status(400).json({ success: false, message: error.message })
-  }
-  res.json({
-    success: true,
-    data: (data || [])
-      .filter((c) => c.user_id === req.user.id) // defense in depth
-      .map((c) => ({ id: c.id, title: c.title, updatedAt: c.updated_at })),
-  })
+    const term = String(req.query?.q || '').trim().toLowerCase()
+    res.json({
+      success: true,
+      data: (data || [])
+        .filter((c) => c.user_id === req.user.id) // defense in depth
+        .map((c) => {
+          const row = { id: c.id, title: c.title, updatedAt: c.updated_at }
+          if (!term) return row
+          // Rank by where the hit was: a title match is almost always the
+          // thread you meant, a body match is a fallback.
+          const inTitle = String(c.title || '').toLowerCase().includes(term)
+          const messages = Array.isArray(c.messages) ? c.messages : []
+          const inBody = messages.some((m) =>
+            String(m?.content || '').toLowerCase().includes(term)
+          )
+          // A short excerpt so the user can tell two similar threads apart.
+          const hit = messages.find((m) =>
+            String(m?.content || '').toLowerCase().includes(term)
+          )
+          const at = String(hit?.content || '').toLowerCase().indexOf(term)
+          row.preview =
+            at >= 0
+              ? `${at > 0 ? '…' : ''}${String(hit.content).slice(Math.max(0, at - 30), at + 90).trim()}${at + 90 < String(hit.content).length ? '…' : ''}`
+              : ''
+          return { ...row, match: inTitle ? 'title' : inBody ? 'message' : 'other' }
+        })
+        .filter((c) => !term || c.match),
+    })
 })
 
 export const getConversationController = asyncHandler(async (req, res) => {

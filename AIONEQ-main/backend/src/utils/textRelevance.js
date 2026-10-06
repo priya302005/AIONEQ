@@ -52,12 +52,89 @@ export const STOPWORDS = new Set([
   'get', 'got', 'go', 'goes', 'went', 'make', 'made', 'say', 'said',
 ])
 
+/*
+ * Low-signal words: they still count, but only as a fraction of a real match.
+ *
+ * Measured failure: "tell me my kodaikalanal journey" retrieved a BE CSE memory
+ * purely on the word "journey", because that word appears across unrelated
+ * memories. Deleting these outright was tried and is worse - a memory that is
+ * genuinely only about a trip then becomes unreachable.
+ *
+ * Weighting instead of deleting keeps them as a tie-breaker (a memory about
+ * journeys still wins over an unrelated one when nothing else matches) while
+ * ensuring they can never carry a match on their own.
+ */
+export const WEAK_TOKENS = new Set([
+  'journey', 'journeys', 'trip', 'trips', 'travel', 'story', 'stories',
+  'thing', 'things', 'stuff', 'moment', 'moments', 'time', 'times',
+  'experience', 'experiences', 'event', 'events', 'detail', 'details',
+  'info', 'information', 'share', 'shared', 'sharing', 'tell',
+])
+
+const WEAK_TOKEN_WEIGHT = 0.25
+
+/** 1 for a real content token, a fraction for a vague one, 0 for a stopword. */
+function tokenWeight(token) {
+  if (STOPWORDS.has(token)) return 0
+  return WEAK_TOKENS.has(token) ? WEAK_TOKEN_WEIGHT : 1
+}
+
 export function contentTokens(text) {
   return tokenize(text).filter((t) => !STOPWORDS.has(t))
 }
 
+/** Weighted coverage denominator, so vague words cannot dominate the score. */
+function totalWeight(qTokens) {
+  let sum = 0
+  for (const t of qTokens) sum += tokenWeight(t)
+  return sum
+}
+
 function clamp01(n) {
   return Math.min(1, Math.max(0, n))
+}
+
+/**
+ * Bounded Levenshtein distance. Returns `max + 1` once the edit budget is
+ * exceeded so hopeless pairs cost nothing to compare.
+ */
+function editDistance(a, b, max) {
+  if (a === b) return 0
+  if (Math.abs(a.length - b.length) > max) return max + 1
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i]
+    let best = i
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + cost)
+      if (row[j] < best) best = row[j]
+    }
+    if (best > max) return max + 1
+    prev = row
+  }
+  return prev[b.length]
+}
+
+/*
+ * Typo tolerance.
+ *
+ * Real queries misspell proper nouns all the time - "kodaikalanal" for
+ * "Kodaikanal", "jananni" for "Janani", "zoho" for "ZOHO". Prefix matching
+ * cannot rescue these because the typo is in the middle of the word, so the
+ * place name scored zero and the only surviving signal was a generic word
+ * like "journey", which pulled in an unrelated memory.
+ *
+ * The budget scales with length so short words are not over-matched:
+ * 4-6 chars allow 1 edit, 7+ allow 2. Anything shorter stays exact, because
+ * allowing an edit there would make nearly every short word match something.
+ */
+function typoEquals(a, b) {
+  const longer = a.length >= b.length ? a : b
+  const shorter = a.length >= b.length ? b : a
+  if (shorter.length < 4) return false
+  const budget = longer.length >= 7 ? 2 : 1
+  return editDistance(shorter, longer, budget) <= budget
 }
 
 function stemEquals(a, b) {
@@ -67,15 +144,17 @@ function stemEquals(a, b) {
   const longer = a.length >= b.length ? a : b
   const shorter = a.length >= b.length ? b : a
   if (longer.length < 3 || shorter.length < 2) return false
-  return longer.startsWith(shorter)
+  if (longer.startsWith(shorter)) return true
+  return typoEquals(a, b)
 }
 
+/** Summed weight of the query tokens found in the haystack. */
 function tokenHits(qTokens, hayTokens) {
   let hits = 0
   for (const t of qTokens) {
     for (const h of hayTokens) {
       if (stemEquals(h, t)) {
-        hits++
+        hits += tokenWeight(t)
         break
       }
     }
@@ -142,7 +221,10 @@ function scoreOneQuestion(question, parts) {
   if (!text.trim()) return 0
 
   const hayTokens = tokenize(text)
-  const coverage = qTokens.length ? tokenHits(qTokens, hayTokens) / qTokens.length : 0
+  // Divide by total weight, not raw token count, so a question made of vague
+  // words scores near zero even when every one of them is present.
+  const denominator = totalWeight(qTokens)
+  const coverage = denominator ? tokenHits(qTokens, hayTokens) / denominator : 0
   const bigram = bigramOverlap(qTokens, hayTokens) * 0.3
 
   let phrase = 0
@@ -157,7 +239,7 @@ function scoreOneQuestion(question, parts) {
   const firstPart = String(all[0] || '')
   if (firstPart) {
     const titleTokens = tokenize(firstPart)
-    const titleCover = titleTokens.length ? tokenHits(qTokens, titleTokens) / qTokens.length : 0
+    const titleCover = denominator ? tokenHits(qTokens, titleTokens) / denominator : 0
     if (titleCover >= 0.5) score += 0.2
   }
 

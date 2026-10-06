@@ -23,25 +23,35 @@ function Ask() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [modalMemory, setModalMemory] = useState(null)
+  const [convoSearch, setConvoSearch] = useState('')
 
   const loadedForId = useRef(null)
 
+  // Debounced so typing does not fire a query per keystroke. 250ms is short
+  // enough to feel live and long enough to avoid a request per character.
+  const loadConversations = useCallback(async (search = '') => {
+    const q = search.trim() ? `?q=${encodeURIComponent(search.trim())}` : ''
+    const res = await api(`/api/query/conversations${q}`)
+    return res.data || []
+  }, [])
+
   const refreshConversations = useCallback(async () => {
     try {
-      const res = await api('/api/query/conversations')
-      setConversations(res.data || [])
+      setConversations(await loadConversations(''))
     } catch (err) {
       setError(err.message)
     }
-  }, [])
+  }, [loadConversations])
 
   useEffect(() => {
     let cancelled = false
-    api('/api/query/conversations')
-      .then((res) => { if (!cancelled) setConversations(res.data || []) })
-      .catch((err) => { if (!cancelled) setError(err.message) })
-    return () => { cancelled = true }
-  }, [])
+    const handle = setTimeout(() => {
+      loadConversations(convoSearch)
+        .then((list) => { if (!cancelled) setConversations(list) })
+        .catch((err) => { if (!cancelled) setError(err.message) })
+    }, convoSearch.trim() ? 250 : 0)
+    return () => { cancelled = true; clearTimeout(handle) }
+  }, [convoSearch, loadConversations])
 
   const selectConversation = (id) => {
     setSearchParams({ c: id }, { replace: true })
@@ -129,16 +139,24 @@ function Ask() {
 
     try {
       let final = null
+      let serverError = null
       await apiStream('/api/query/stream', {
         body: { question: text, conversationId: urlId },
         onEvent: ({ type, data }) => {
           if (type === 'delta') appendDelta(data.text)
           else if (type === 'done') final = data
-          else if (type === 'error') throw new Error(data.message)
+          // Recorded instead of thrown: the throw would land inside the reader
+          // callback, abort the stream read, and replace the server's actual
+          // explanation with this generic message.
+          else if (type === 'error') serverError = data.message
         },
       })
 
-      if (!final) throw new Error('The stream ended before an answer arrived.')
+      // The server already explains the common causes (model server down,
+      // timeout). Prefer that over anything invented here.
+      if (!final) {
+        throw new Error(serverError || 'The stream ended before an answer arrived.')
+      }
 
       // The streamed text is provisional. `done` is authoritative, so it always
       // wins - that is what makes a dropped or corrected sentence safe.
@@ -189,6 +207,8 @@ function Ask() {
       <div className="ask-layout">
         <ConversationSidebar
           conversations={conversations}
+            search={convoSearch}
+            onSearch={setConvoSearch}
           activeId={urlId}
           onSelect={selectConversation}
           onNew={newConversation}

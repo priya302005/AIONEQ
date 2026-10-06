@@ -10,8 +10,9 @@ function ConversationSidebar({
   onNew,
   onRename,
   onDelete,
+  search = '',
+  onSearch,
 }) {
-  const [search, setSearch] = useState('')
   const [menuOpenId, setMenuOpenId] = useState(null)
   const [renamingId, setRenamingId] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
@@ -27,11 +28,11 @@ function ConversationSidebar({
     return () => document.removeEventListener('mousedown', onDocClick)
   }, [menuOpenId])
 
-  const query = search.trim().toLowerCase()
-  const filtered = query
-    ? (conversations || []).filter((c) => (c.title || '').toLowerCase().includes(query))
-    : conversations || []
-  const groups = groupConversations(filtered)
+  // Filtering happens on the server, not here. The old version filtered titles
+  // only, which is why searching for something you had actually asked about
+  // found nothing - the question lives in the messages, not the title.
+  const groups = groupConversations(conversations || [])
+  const query = search.trim()
 
   const closeMenu = () => setMenuOpenId(null)
 
@@ -76,13 +77,26 @@ function ConversationSidebar({
         New conversation
       </button>
 
-      <input
-        type="search"
-        className="convo-search"
-        placeholder="Search conversations"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
+      <div className="convo-search-wrap">
+        <input
+          type="search"
+          className="convo-search"
+          placeholder="Search titles and messages"
+          value={search}
+          onChange={(e) => onSearch?.(e.target.value)}
+          aria-label="Search conversations"
+        />
+        {query && (
+          <button
+            type="button"
+            className="convo-search-clear"
+            onClick={() => onSearch?.('')}
+            aria-label="Clear search"
+          >
+            ×
+          </button>
+        )}
+      </div>
 
       <div className="convo-list">
         {groups.length === 0 && (

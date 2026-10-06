@@ -16,11 +16,34 @@ async function withErrorCapture(promise) {
   }
 }
 
-export async function listConversations(token) {
-  return clientFor(token)
+/**
+ * Lists the user's conversations, newest first.
+ *
+ * `search` matches the title OR the text of any message in the thread, so a
+ * conversation can be found by something that was actually said inside it - the
+ * question you asked weeks ago is usually not in the title. ilike is used
+ * because Supabase search vectors are not guaranteed to exist on this table,
+ * and RLS still scopes every row to the caller.
+ */
+export async function listConversations(token, { search = '', limit = 100 } = {}) {
+  const term = String(search || '').trim()
+  // Message bodies are only selected while searching. Fetching them on every
+  // sidebar load would pull every stored chat into memory just to draw titles.
+  const columns = term ? 'id,title,updated_at,user_id,messages' : 'id,title,updated_at,user_id'
+
+  let query = clientFor(token)
     .from('conversations')
-    .select('id,title,updated_at,user_id')
+    .select(columns)
     .order('updated_at', { ascending: false })
+    .limit(limit)
+
+  if (term) {
+    // Escape the LIKE metacharacters so a user typing "50%" or "a_b" searches
+    // for that literal text instead of turning into a wildcard.
+    const safe = term.replace(/[%_]/g, (ch) => `\\${ch}`)
+    query = query.or(`title.ilike.%${safe}%,messages.ilike.%${safe}%`)
+  }
+  return withErrorCapture(query)
 }
 
 export async function getConversation(token, id) {
