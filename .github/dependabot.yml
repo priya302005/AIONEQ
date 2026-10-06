@@ -1,0 +1,42 @@
+version: 2
+updates:
+  # Backend (Express) dependency updates + security alerts.
+  - package-ecosystem: "npm"
+    directory: "/AIONEQ-main/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    versioning-strategy: increase-if-necessary
+    commit-message:
+      prefix: "chore(backend)"
+    labels:
+      - "dependencies"
+      - "security"
+    open-pull-requests-limit: 10
+
+  # Frontend (React + Vite) dependency updates + security alerts.
+  - package-ecosystem: "npm"
+    directory: "/AIONEQ-main/echo-mind"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:30"
+      timezone: "UTC"
+    versioning-strategy: increase-if-necessary
+    commit-message:
+      prefix: "chore(frontend)"
+    labels:
+      - "dependencies"
+      - "security"
+    open-pull-requests-limit: 10
+
+  # GitHub Actions workflow updates (if any are added later).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"
+      - "ci"

@@ -1,0 +1,12 @@
+# --- EchoMind runtime artifacts (not source) ---
+# Local-LLM model binaries: multi-hundred-MB downloads, never commit.
+AIONEQ-main/llm/instruct/
+AIONEQ-main/llm/out/
+
+# --- node / build ---
+node_modules/
+dist/
+
+# --- local environment & secrets ---
+.env
+*.log
