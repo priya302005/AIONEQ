@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { Archiver } from 'archiver'
+import { ZipArchive } from 'archiver'
 import { createClient } from '@supabase/supabase-js'
 import { config } from '../config/config.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
@@ -51,7 +51,10 @@ export const exportAllController = asyncHandler(async (req, res) => {
     })),
   }
 
-  const zip = new Archiver('zip', { zlib: { level: 9 } })
+  // Archiver v8: the concrete encoder class is ZipArchive. Instantiating the
+  // base `Archiver` class (as this did before) leaves this._module = false and
+  // crashes the process when the first append runs.
+  const zip = new ZipArchive({ zlib: { level: 9 } })
   res.setHeader('Content-Type', 'application/zip')
   res.setHeader('Content-Disposition', `attachment; filename="echomind-export-${req.user.id.slice(0, 8)}.zip"`)
   res.setHeader('Cache-Control', 'private, no-store')

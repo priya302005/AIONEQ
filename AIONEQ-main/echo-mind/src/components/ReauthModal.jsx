@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../auth'
 
@@ -13,7 +13,12 @@ export function useReauth() {
   const [required, setRequired] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const pendingRef = { current: null }
+  // Must be a real ref: a plain `{ current: null }` object is recreated on
+  // every render, so the action stored in requireReauth() was always gone by
+  // the time confirm() ran - after a successful password check it then fell
+  // through to `await action()` with action === null, the modal closed, and
+  // nothing ever happened.
+  const pendingRef = useRef(null)
 
   function requireReauth(action) {
     pendingRef.current = action
