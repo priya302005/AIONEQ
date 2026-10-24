@@ -70,6 +70,74 @@ export function relayRetrievedMemories(memories, { max = 2, charLimit = 420 } = 
   return `${lead}\n${lines.join('\n')}`
 }
 
+const STOPWORDS = new Set(
+  'a an the of to in on at for and or is are was were be been am i me my mine you your do does did what which who whom how when where why tell show give about with from that this these those it its as by can could would should please any all'.split(' ')
+)
+
+function queryTerms(question) {
+  const words = String(question || '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || []
+  return [...new Set(words.filter((w) => w.length > 1 && !STOPWORDS.has(w)))].map((w) =>
+    w.length > 4 && w.endsWith('s') ? w.slice(0, -1) : w
+  )
+}
+
+/** Splits a memory into display lines, dropping markdown markers. */
+function memoryLines(text) {
+  const out = []
+  for (const raw of String(text || '').split(/\n+/)) {
+    const line = raw.replace(/^[\s#>*\-\u2022]+/, '').replace(/\s+/g, ' ').trim()
+    if (!line) continue
+    // Break long prose lines into sentences so one answer line stays short.
+    const parts = line.length > 220 ? line.split(/(?<=[.!?])\s+/) : [line]
+    for (const p of parts) if (p.trim()) out.push(p.trim())
+  }
+  return out
+}
+
+/**
+ * Answers a question by quoting the lines of the retrieved memories that mention
+ * the question's terms. No model is involved, so nothing can be invented: every
+ * word shown is the user's own. Used when the only local model is too small to
+ * write an answer.
+ *
+ * @returns {{answer: string, citedMemoryIds: string[]}}
+ */
+export function extractiveAnswer(question, memories, { maxMemories = 2, maxLines = 4 } = {}) {
+  const terms = queryTerms(question)
+  const blocks = []
+
+  for (const m of (memories || []).slice(0, maxMemories)) {
+    const text = m.fullText || m.snippet || ''
+    const lines = memoryLines(text)
+    if (!lines.length) continue
+    const scored = lines
+      .map((line, index) => {
+        const low = line.toLowerCase()
+        return { line, index, score: terms.filter((t) => low.includes(t)).length }
+      })
+      .filter((l) => l.score > 0)
+    const picked = scored.length
+      ? [...scored].sort((a, b) => b.score - a.score || a.index - b.index).slice(0, maxLines).sort((a, b) => a.index - b.index)
+      : null
+    blocks.push({ m, picked, lines })
+  }
+  if (!blocks.length) return { answer: '', citedMemoryIds: [] }
+
+  // Prefer memories with a real match; if none matched, show the opening of the best one.
+  const matched = blocks.filter((b) => b.picked)
+  const use = matched.length ? matched : [{ ...blocks[0], picked: blocks[0].lines.slice(0, 3).map((line) => ({ line })) }]
+
+  const parts = use.map(({ m, picked }) => {
+    const id = m.memoryId || m.id
+    const body = picked.map((p) => `- ${truncate(p.line, 300)}`).join('\n')
+    return `From "${m.title || 'your memory'}":\n${body}${id ? ` (cite: ${id})` : ''}`
+  })
+  return {
+    answer: parts.join('\n\n'),
+    citedMemoryIds: use.map(({ m }) => m.memoryId || m.id).filter(Boolean),
+  }
+}
+
 /**
  * Formats one retrieved memory for the prompt.
  * The id is included because the citation validator accepts only ids that were

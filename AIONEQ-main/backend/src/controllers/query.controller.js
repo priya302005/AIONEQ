@@ -35,6 +35,7 @@ import {
   noContextAnswer,
   stripAttributionOpener,
   streamFailureMessage,
+  extractiveAnswer,
   noContextAnswerShort,
   relayRetrievedMemories,
   formatLinks,
@@ -108,6 +109,16 @@ function compactUserContent(q, rawContext) {
   const budget = Math.max(60, COMPACT_USER_CHAR_BUDGET - q.length)
   const trimmed = rawContext.length > budget ? `${rawContext.slice(0, budget).trimEnd()}…` : rawContext
   return `# User's question\n${q}\n\n# Memories\n${trimmed}`
+}
+
+/** Context lines for the compact prompt. Shared by the streaming and non-streaming routes. */
+function compactContextLines(memories) {
+  return memories
+    .map((m, i) => {
+      const date = m.eventDate ? new Date(m.eventDate).toISOString().slice(0, 10) : 'unknown date'
+      return `[${i + 1}] id: ${m.memoryId} | ${m.type} | ${date}\n${m.snippet}`
+    })
+    .join('\n\n')
 }
 
 // ------------------------------------------------------------------ ask -----
@@ -185,12 +196,7 @@ export const askQuestion = asyncHandler(async (req, res) => {
     if (!memories.length) {
       answer = "I don't have any memories about that yet."
     } else {
-      const context = memories
-        .map((m, i) => {
-          const date = m.eventDate ? new Date(m.eventDate).toISOString().slice(0, 10) : 'unknown date'
-          return `[${i + 1}] id: ${m.memoryId} | ${m.type} | ${date}\n${m.snippet}`
-        })
-        .join('\n\n')
+      const context = compactContextLines(memories)
 
       let raw
       try {
@@ -451,6 +457,20 @@ export const askQuestion = asyncHandler(async (req, res) => {
   })
 })
 
+/** Stream error text: specific for provider faults, generic mapper otherwise. */
+function streamErrorMessage(err) {
+  if (err instanceof ProviderError) {
+    if (err.code === 'provider_http_error') {
+      return `The local model server rejected the request (HTTP ${err.status}). Check the llama-server window for the reason; with a small context (-c 256) the prompt may be too long.`
+    }
+    if (err.code === 'provider_bad_response') return err.message
+    if (err.code === 'provider_unreachable' || err.code === 'provider_timeout') {
+      return streamFailureMessage(err.cause || err)
+    }
+  }
+  return streamFailureMessage(err)
+}
+
 /**
  * Single entry point for memory retrieval in the ask flow.
  * Wraps the RLS-scoped client, applies the caller's type filter, and records a
@@ -530,26 +550,60 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
       memories[0].score < 0.28 &&
       classifyIntent(q).recall
 
-    const system = buildSystemPrompt({
-      hasMemories: true,
-      hasHistory: false,
-      ambiguity: ambiguous,
-      lowConfidence,
-      broadRecall: usedBroadRecall,
-    })
-    const user = buildContext(q, {
-      memories,
-      currentConversation: null,
-      histories: [],
-      links: '',
-    })
+    const compact = config.localAiCompactPrompt
+    // The tiny template-less GPT cannot serve /v1/chat/completions. In compact
+    // mode, mirror askQuestion: trim to the small window and use raw completions.
+    if (compact) memories = memories.slice(0, MAX_RETRIEVED)
+
+    const system = compact
+      ? COMPACT_SYSTEM
+      : buildSystemPrompt({
+          hasMemories: true,
+          hasHistory: false,
+          ambiguity: ambiguous,
+          lowConfidence,
+          broadRecall: usedBroadRecall,
+        })
+    const user = compact
+      ? compactUserContent(q, compactContextLines(memories))
+      : buildContext(q, {
+          memories,
+          currentConversation: null,
+          histories: [],
+          links: '',
+        })
 
     send('status', { phase: 'answering' })
+
+    // Compact mode has no token stream: one completion, fed through the same
+    // sentence grading below as a single chunk.
+    const answerSource = compact
+      ? (async function* () {
+          const out = await generateAnswer({
+            system,
+            user,
+            maxTokens: 32,
+            compact: true,
+            userId: req.user.id,
+            ip: req.ip,
+          })
+          yield out.text
+        })()
+      : chatCompletionStream({ system, user })
 
     const sentences = createSentenceStream()
     const released = []
     let sawDelta = false
-    for await (const delta of chatCompletionStream({ system, user })) {
+    // Extractive mode: the tiny model cannot write answers, so quote the
+    // matching lines of the memories instead. No model call, nothing invented.
+    const extractive = compact && config.localAiExtractive
+    const extracted = extractive ? extractiveAnswer(q, memories) : null
+    if (extractive && extracted.answer) {
+      released.push(extracted.answer)
+      sawDelta = true
+      send('delta', { text: extracted.answer })
+    }
+    for await (const delta of extractive ? [] : answerSource) {
       if (!alive()) break
       if (delta) sawDelta = true
       for (const sentence of sentences.push(delta)) {
@@ -568,7 +622,7 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
         send('delta', { text: graded.answer })
       }
     }
-    if (alive()) {
+    if (alive() && !extractive) {
       for (const sentence of sentences.flush()) {
         const graded = groundAnswer({ answer: sentence, memories, honestFallback: '' })
         if (graded.removedClaims.length || !graded.answer.trim()) continue
@@ -591,13 +645,25 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
     // Authoritative pass over exactly what was shown, so the client ends up
     // with the same answer, citations and suggestions the non-streaming route
     // would have produced.
-    const final = streamed
-      ? groundAnswer({
-          answer: streamed,
-          memories,
-          honestFallback: relayRetrievedMemories(memories) || noContextAnswer(),
-        })
-      : { answer: noContextAnswer(), citedMemoryIds: [] }
+    //
+    // A tiny model often emits nothing usable (a lone "." or a few stray
+    // words). In compact mode that is a model limit, not "no memory": show the
+    // retrieved excerpts themselves, verbatim, rather than an empty bubble.
+    const words = (streamed.match(/[\p{L}\p{N}]+/gu) || []).length
+    const unusable = compact && words < 3
+    const relayed = relayRetrievedMemories(memories)
+    const final =
+      extractive && extracted.answer
+        ? { answer: extracted.answer, citedMemoryIds: extracted.citedMemoryIds }
+        : streamed && !unusable
+        ? groundAnswer({
+            answer: streamed,
+            memories,
+            honestFallback: relayed || noContextAnswer(),
+          })
+        : unusable && relayed
+          ? { answer: relayed, citedMemoryIds: memories.slice(0, 2).map((m) => m.memoryId) }
+          : { answer: noContextAnswer(), citedMemoryIds: [] }
 
     // Broad recall must not produce an answer that cites nothing.
     const answer =
@@ -651,7 +717,12 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
     // fetch throws ECONNREFUSED before any frame arrives, and reporting only
     // "could not complete" left the user with no idea what to start. Say what
     // actually failed.
-    send('error', { message: streamFailureMessage(err) })
+    //
+    // Provider faults (e.g. an HTTP 400 because the prompt overflowed a small
+    // context window) used to collapse into the generic message too. Say what
+    // happened, without echoing the provider's body, which may contain the prompt.
+    console.error('[ask-stream] failed:', err?.name, err?.code, err?.status, err instanceof ProviderError ? '' : err?.message)
+    send('error', { message: streamErrorMessage(err) })
   } finally {
     if (!res.writableEnded) res.end()
   }
