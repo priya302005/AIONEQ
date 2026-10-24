@@ -555,9 +555,7 @@ export async function bootstrap() {
   const memoryController = await import('../src/controllers/memory.controller.js')
   const accountController = await import('../src/controllers/account.controller.js')
 
-  const legacyAsk = await import('../src/controllers/legacyAsk.controller.js')
-
-  bootstrapped = { controller, memoryController, accountController, legacyAsk }
+  bootstrapped = { controller, memoryController, accountController }
   return bootstrapped
 }
 
@@ -651,28 +649,6 @@ export function stopStubLLM() {
   return stubServer ? new Promise((resolve) => stubServer.close(resolve)) : Promise.resolve()
 }
 
-/** Runs the real legacy (referral) ask controller as `userId` about `ownerId`. */
-export async function runLegacyAsk({ userId, ownerId, question }) {
-  const { legacyAsk } = await bootstrap()
-  const queriesBefore = store.queries.length
-  const callsBefore = stubLLM.calls
-  stubLLM.lastSystem = null
-  stubLLM.lastUser = null
-  const req = fakeReq({ userId, body: { question }, params: { ownerId } })
-  const res = fakeRes()
-  let nextErr = null
-  await legacyAsk.askLegacyController(req, res, (err) => {
-    nextErr = err
-  })
-  return {
-    status: res.statusCode,
-    body: res.body,
-    prompt: { system: stubLLM.lastSystem, user: stubLLM.lastUser },
-    llmCalls: stubLLM.calls - callsBefore,
-    queries: store.queries.slice(queriesBefore),
-    nextErr,
-  }
-}
 
 /**
  * Runs the real streaming Ask controller (askQuestionStream) and collects the
