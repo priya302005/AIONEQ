@@ -99,6 +99,10 @@ export const config = {
   // window) cannot fit the full EchoMind prompt. When enabled, use a stripped
   // system prompt and a truncated memory context so the request fits the model.
   localAiCompactPrompt: bool(process.env.LOCAL_AI_COMPACT_PROMPT, false),
+  // The tiny model cannot write answers, so in compact mode (default) Ask skips
+  // it and answers by quoting the lines of the retrieved memories that match the
+  // question, with citations. Set LOCAL_AI_EXTRACTIVE=false to use the model.
+  localAiExtractive: bool(process.env.LOCAL_AI_EXTRACTIVE, bool(process.env.LOCAL_AI_COMPACT_PROMPT, false)),
 
   // --- AI inference (generation parameters) ---
   // One place for every generation parameter the unified inference service
