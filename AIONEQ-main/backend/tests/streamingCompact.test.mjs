@@ -86,3 +86,16 @@ test('full mode streaming still uses chat completions', async () => {
   assert.ok(result.done, 'stream must finish with a done event')
   assert.ok(result.lastUrl.endsWith('/v1/chat/completions'), `got ${result.lastUrl}`)
 })
+
+test('compact: an unusable model reply (a lone ".") falls back to the retrieved memory', async () => {
+  config.localAiCompactPrompt = true
+  seed()
+  setStubBehavior(() => '.')
+
+  const result = await runAskStream({ userId: USER, question: 'who am i, janani NEC' })
+
+  assert.equal(result.error, null)
+  assert.ok(result.done, 'stream must finish with a done event')
+  assert.match(result.done.answer, /janani/i, 'the memory text should be shown instead of "."')
+  assert.equal(result.done.citedMemories.length, 1)
+})
