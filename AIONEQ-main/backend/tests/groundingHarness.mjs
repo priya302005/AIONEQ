@@ -225,16 +225,6 @@ function cosine(a, b) {
   return dot / Math.sqrt(na * nb)
 }
 
-/** RLS stand-in for a legacy grant recipient reading someone else's rows. */
-function recipientMaySee(callerId, row, table) {
-  const granted = store.legacy_grants.some(
-    (g) => g.owner_id === row.user_id && g.recipient_user_id === callerId && g.status === 'active'
-  )
-  if (!granted) return false
-  const memory = table === 'memories' ? row : store.memories.find((m) => m.id === row.memory_id)
-  return Boolean(memory) && !memory.legacy_excluded
-}
-
 class FakeQuery {
   constructor(client, table) {
     this.client = client
@@ -330,18 +320,11 @@ class FakeQuery {
    * is keyed by owner_id / recipient_user_id rather than user_id,
    * mirroring the real policies in sql/security.sql.
    */
-  visibleRows(forWrite = false) {
+  visibleRows() {
     const userId = ownerOf(this.client)
     const rows = store[this.table]
     if (this.table === 'legacy_grants') {
       return rows.filter((row) => row.owner_id === userId || row.recipient_user_id === userId)
-    }
-    // Legacy recipients get SELECT only; update/delete policies stay owner-only.
-    if (!forWrite && (this.table === 'memories' || this.table === 'memory_vectors')) {
-      // Mirrors memories_select_legacy / memory_vectors_select_legacy in
-      // sql/legacy_ask.sql: own rows, plus non-excluded rows of an owner who
-      // holds an ACTIVE grant for this caller.
-      return rows.filter((row) => row.user_id === userId || recipientMaySee(userId, row, this.table))
     }
     return rows.filter((row) => row.user_id === userId)
   }
@@ -396,12 +379,12 @@ class FakeQuery {
         return { data: this.singleRow ? rows[0] || null : rows, error: null, count: rows.length }
       }
       if (kind === 'update') {
-        const rows = this.visibleRows(true).filter(this.applyFilters())
+        const rows = this.visibleRows().filter(this.applyFilters())
         for (const row of rows) Object.assign(row, payload, { updated_at: new Date().toISOString() })
         return { data: this.singleRow ? rows[0] || null : rows, error: null, count: rows.length }
       }
       if (kind === 'delete') {
-        const doomed = this.visibleRows(true).filter(this.applyFilters())
+        const doomed = this.visibleRows().filter(this.applyFilters())
         store[this.table] = store[this.table].filter((r) => !doomed.includes(r))
         return { data: this.singleRow ? doomed[0] || null : doomed, error: null, count: doomed.length }
       }
@@ -499,7 +482,7 @@ class FakeClient {
     const scored = store.memory_vectors
       .filter(
         (v) =>
-          (v.user_id === userId || recipientMaySee(userId, v, 'memory_vectors')) &&
+          v.user_id === userId &&
           v.user_id === args.p_user_id &&
           v.dim === qDim &&
           (args.p_model == null || v.model === args.p_model)
@@ -544,9 +527,7 @@ export async function bootstrap() {
   const memoryController = await import('../src/controllers/memory.controller.js')
   const accountController = await import('../src/controllers/account.controller.js')
 
-  const legacyAsk = await import('../src/controllers/legacyAsk.controller.js')
-
-  bootstrapped = { controller, memoryController, accountController, legacyAsk }
+  bootstrapped = { controller, memoryController, accountController }
   return bootstrapped
 }
 
@@ -638,27 +619,4 @@ export function citedIds(result) {
 
 export function stopStubLLM() {
   return stubServer ? new Promise((resolve) => stubServer.close(resolve)) : Promise.resolve()
-}
-
-/** Runs the real legacy (referral) ask controller as `userId` about `ownerId`. */
-export async function runLegacyAsk({ userId, ownerId, question }) {
-  const { legacyAsk } = await bootstrap()
-  const queriesBefore = store.queries.length
-  const callsBefore = stubLLM.calls
-  stubLLM.lastSystem = null
-  stubLLM.lastUser = null
-  const req = fakeReq({ userId, body: { question }, params: { ownerId } })
-  const res = fakeRes()
-  let nextErr = null
-  await legacyAsk.askLegacyController(req, res, (err) => {
-    nextErr = err
-  })
-  return {
-    status: res.statusCode,
-    body: res.body,
-    prompt: { system: stubLLM.lastSystem, user: stubLLM.lastUser },
-    llmCalls: stubLLM.calls - callsBefore,
-    queries: store.queries.slice(queriesBefore),
-    nextErr,
-  }
 }

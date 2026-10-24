@@ -161,7 +161,7 @@ async function rowsForIds(client, ids) {
 
 // ------------------------------------------------------ signal 2: keyword ---
 
-async function keywordCandidates(client, question, limit, userId) {
+async function keywordCandidates(client, question, limit) {
   const out = []
   // Try the enriched column set first, then fall back to the base set so an
   // un-migrated database still returns results.
@@ -170,7 +170,6 @@ async function keywordCandidates(client, question, limit, userId) {
       const { data, error } = await client
         .from('memories')
         .select(columns)
-        .eq('user_id', userId) // a legacy recipient's token can also see their OWN rows
         .textSearch('search_vector', question, { config: 'english', type: 'websearch' })
         .limit(limit)
       if (!error && data?.length) {
@@ -185,12 +184,11 @@ async function keywordCandidates(client, question, limit, userId) {
 }
 
 /** Recency candidates. Also the only way to reach a memory FTS misses. */
-async function recencyCandidates(client, limit, userId) {
+async function recencyCandidates(client, limit) {
   try {
     const { data, error } = await client
       .from('memories')
       .select(BASE_COLUMNS)
-      .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(limit)
     if (!error && data) return data
@@ -336,8 +334,8 @@ export async function retrieveMemories(client, userId, question, opts = {}) {
   // --- gather candidates -------------------------------------------------
   const [vectorScores, keywordRows, recencyRows] = await Promise.all([
     useVector ? semanticCandidates(client, userId, q, candidateLimit) : Promise.resolve(new Map()),
-    useKeyword ? keywordCandidates(client, q, candidateLimit, userId) : Promise.resolve([]),
-    useKeyword ? recencyCandidates(client, Math.floor(candidateLimit / 2), userId) : Promise.resolve([]),
+    useKeyword ? keywordCandidates(client, q, candidateLimit) : Promise.resolve([]),
+    useKeyword ? recencyCandidates(client, Math.floor(candidateLimit / 2)) : Promise.resolve([]),
   ])
 
   const byId = new Map()

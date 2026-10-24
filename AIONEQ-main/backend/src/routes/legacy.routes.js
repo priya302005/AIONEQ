@@ -8,10 +8,8 @@ import {
   pendingGrantsController,
   archiveController,
 } from '../controllers/legacy.controller.js'
-import { askLegacyController } from '../controllers/legacyAsk.controller.js'
 import { requireAuth } from '../middleware/auth.middleware.js'
-import { validate, createGrantSchema, claimGrantSchema, idParamSchema, askSchema } from '../validation/schemas.js'
-import { askRateLimiter } from '../middleware/rateLimit.middleware.js'
+import { validate, createGrantSchema, claimGrantSchema, idParamSchema } from '../validation/schemas.js'
 import { z } from 'zod'
 
 const router = Router()
@@ -29,13 +27,5 @@ router.post('/grants/:id/claim', requireAuth, validate(idParamSchema, 'params'),
 // What the recipient can currently read.
 router.get('/access', requireAuth, legacyAccessOverviewController)
 router.get('/archive/:ownerId', requireAuth, validate(z.object({ ownerId: z.uuid() }), 'params'), archiveController)
-router.post(
-  '/archive/:ownerId/ask',
-  requireAuth,
-  askRateLimiter,
-  validate(z.object({ ownerId: z.uuid() }), 'params'),
-  validate(askSchema),
-  askLegacyController
-)
 
 export default router
