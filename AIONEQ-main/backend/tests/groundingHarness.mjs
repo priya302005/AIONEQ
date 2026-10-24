@@ -79,11 +79,14 @@ export const stubLLM = {
   calls: 0,
   lastSystem: null,
   lastUser: null,
+  /** URL path of the last request, e.g. /v1/completions or /v1/chat/completions. */
+  lastUrl: null,
   history: [],
   reset() {
     this.calls = 0
     this.lastSystem = null
     this.lastUser = null
+    this.lastUrl = null
     this.history = []
   },
 }
@@ -135,13 +138,21 @@ async function startStubLLM() {
       stubLLM.calls++
       stubLLM.lastSystem = system
       stubLLM.lastUser = user
-      stubLLM.history.push({ system, user })
+      stubLLM.lastUrl = String(req.url || '')
+      stubLLM.history.push({ system, user, url: stubLLM.lastUrl })
 
       let answer = ''
       try {
         answer = stubBehavior({ system, user })
       } catch {
         answer = ''
+      }
+      // Streaming chat: answer as SSE frames, like llama-server does.
+      if (isChat && payload.stream) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}\n\n`)
+        res.end('data: [DONE]\n\n')
+        return
       }
       const completion = isChat
         ? { choices: [{ message: { content: answer } }] }
@@ -660,5 +671,61 @@ export async function runLegacyAsk({ userId, ownerId, question }) {
     llmCalls: stubLLM.calls - callsBefore,
     queries: store.queries.slice(queriesBefore),
     nextErr,
+  }
+}
+
+/**
+ * Runs the real streaming Ask controller (askQuestionStream) and collects the
+ * SSE events it wrote.
+ *
+ * @returns {Promise<{events:Array<{event:string,data:object}>, done:object|null,
+ *   error:object|null, lastUrl:string|null, llmCalls:number}>}
+ */
+export async function runAskStream({ userId, question }) {
+  const { controller } = await bootstrap()
+  const callsBefore = stubLLM.calls
+  stubLLM.lastUrl = null
+
+  const req = fakeReq({ userId, body: { question } })
+  req.on = () => req
+  const chunks = []
+  const res = {
+    writableEnded: false,
+    writeHead() {
+      return res
+    },
+    write(chunk) {
+      chunks.push(String(chunk))
+      return true
+    },
+    end() {
+      res.writableEnded = true
+    },
+    status(code) {
+      res.statusCode = code
+      return res
+    },
+    json(payload) {
+      res.body = payload
+      return res
+    },
+  }
+  await controller.askQuestionStream(req, res, () => {})
+
+  const events = chunks
+    .join('')
+    .split('\n\n')
+    .filter(Boolean)
+    .map((frame) => {
+      const event = /^event: (.*)$/m.exec(frame)?.[1] || 'message'
+      const raw = /^data: (.*)$/m.exec(frame)?.[1] || '{}'
+      return { event, data: JSON.parse(raw) }
+    })
+  return {
+    events,
+    done: events.find((e) => e.event === 'done')?.data || null,
+    error: events.find((e) => e.event === 'error')?.data || null,
+    lastUrl: stubLLM.lastUrl,
+    llmCalls: stubLLM.calls - callsBefore,
   }
 }
