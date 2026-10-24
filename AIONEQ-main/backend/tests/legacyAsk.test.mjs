@@ -173,3 +173,49 @@ test('owner asking about themselves via this route is rejected; nothing is persi
   await runLegacyAsk({ userId: RECIPIENT, ownerId: OWNER, question: ASK })
   assert.equal(store.conversations.length, 0)
 })
+
+test('owner turned memory AI off: the recipient is blocked, no model call, nothing searched', async () => {
+  store.reset(); setStubBehavior(null)
+  store.memories.push(education()); store.legacy_grants.push(grant())
+  store.memory_settings.push({ user_id: OWNER, memory_ai_enabled: false })
+  const r = await runLegacyAsk({ userId: RECIPIENT, ownerId: OWNER, question: ASK })
+  assert.equal(r.status, 403)
+  assert.match(r.body.message, /turned off/i)
+  assert.equal(r.llmCalls, 0)
+  assert.ok(!r.queries.some((q) => q.table === 'memories'), 'the owner memories must not be searched')
+})
+
+test('owner has AI on (or no settings row): the recipient can ask', async () => {
+  store.reset(); setStubBehavior(null)
+  store.memories.push(education()); store.legacy_grants.push(grant())
+  store.memory_settings.push({ user_id: OWNER, memory_ai_enabled: true })
+  const r = await runLegacyAsk({ userId: RECIPIENT, ownerId: OWNER, question: ASK })
+  assert.equal(r.status, 200)
+})
+
+test('answer text never contains raw (cite: id) markers', async () => {
+  store.reset(); setStubBehavior(null)
+  store.memories.push(education()); store.legacy_grants.push(grant())
+  const r = await runLegacyAsk({ userId: RECIPIENT, ownerId: OWNER, question: ASK })
+  assert.equal(r.status, 200)
+  assert.ok(!/\(cite:/i.test(r.body.answer), r.body.answer)
+})
+
+test('extractive mode: the recipient gets the owner matching lines, with no model call', async () => {
+  const { config } = await import('../src/config/config.js')
+  const saved = [config.localAiCompactPrompt, config.localAiExtractive]
+  config.localAiCompactPrompt = true
+  config.localAiExtractive = true
+  try {
+    store.reset(); setStubBehavior(null)
+    const m = education(); store.memories.push(m); store.legacy_grants.push(grant())
+    const r = await runLegacyAsk({ userId: RECIPIENT, ownerId: OWNER, question: ASK })
+    assert.equal(r.status, 200)
+    assert.equal(r.llmCalls, 0)
+    assert.match(r.body.answer, /education/i)
+    assert.ok(!/\(cite:/i.test(r.body.answer))
+    assert.deepEqual(r.body.citedMemories, [m.id])
+  } finally {
+    ;[config.localAiCompactPrompt, config.localAiExtractive] = saved
+  }
+})

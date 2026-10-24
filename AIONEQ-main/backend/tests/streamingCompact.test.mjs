@@ -120,6 +120,7 @@ test('extractive: answers by quoting the matching memory lines, with no model ca
     assert.equal(result.error, null)
     assert.equal(result.llmCalls, 0, 'extractive mode must not call the model')
     assert.match(result.done.answer, /Salary: 3 LPA/)
+    assert.ok(!/\(cite:/i.test(result.done.answer), 'raw citation markers must not be shown')
     assert.ok(!/Industry/.test(result.done.answer), 'unrelated lines must not be shown')
     assert.equal(result.done.citedMemories.length, 1)
   } finally {

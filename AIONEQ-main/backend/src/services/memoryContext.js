@@ -70,6 +70,14 @@ export function relayRetrievedMemories(memories, { max = 2, charLimit = 420 } = 
   return `${lead}\n${lines.join('\n')}`
 }
 
+/** Removes (cite: <id>) markers so the reader sees clean text. Citations travel separately. */
+export function stripCitationMarkers(text) {
+  return String(text || '')
+    .replace(/[ \t]*\(\s*cite:\s*[0-9a-fA-F-]{36}\s*\)/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim()
+}
+
 const STOPWORDS = new Set(
   'a an the of to in on at for and or is are was were be been am i me my mine you your do does did what which who whom how when where why tell show give about with from that this these those it its as by can could would should please any all'.split(' ')
 )

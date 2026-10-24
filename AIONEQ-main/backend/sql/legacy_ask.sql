@@ -37,3 +37,29 @@ create policy "memory_vectors_select_legacy" on public.memory_vectors
          and lg.status = 'active'
     )
   );
+
+-- 4. The owner's "memory AI" switch must also bind recipients. memory_settings is
+--    private to its owner, so a recipient cannot read it directly. This function
+--    returns only a yes/no, and only to a caller holding an ACTIVE grant from
+--    that owner (anyone else gets false), so it cannot be used to probe accounts.
+create or replace function public.legacy_owner_ai_enabled(p_owner uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select case
+    when exists (
+      select 1 from public.legacy_grants lg
+       where lg.owner_id = p_owner
+         and lg.recipient_user_id = auth.uid()
+         and lg.status = 'active'
+    )
+    then coalesce((select ms.memory_ai_enabled from public.memory_settings ms where ms.user_id = p_owner), true)
+    else false
+  end;
+$$;
+
+revoke all on function public.legacy_owner_ai_enabled(uuid) from public;
+grant execute on function public.legacy_owner_ai_enabled(uuid) to authenticated;

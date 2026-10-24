@@ -3188,3 +3188,34 @@
   line-height: 1.45;
   color: var(--text-dim, #8b8b98);
 }
+/* ---- Legacy ask panel ---- */
+.legacy-ask {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid rgba(240, 90, 10, 0.18);
+  border-radius: 16px;
+  background: #fff8f1;
+}
+.legacy-ask-thread {
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.legacy-ask-q {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+.legacy-ask-a {
+  margin: 0 0 6px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.legacy-ask-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}

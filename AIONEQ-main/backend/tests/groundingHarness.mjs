@@ -501,6 +501,16 @@ class FakeClient {
   rpc(name, args) {
     const userId = ownerOf(this)
     record(userId, 'rpc', name, '')
+    if (name === 'legacy_owner_ai_enabled') {
+      // Mirrors sql/legacy_ask.sql: true only for an active-grant recipient whose
+      // owner has not switched memory AI off; false for everyone else.
+      const granted = store.legacy_grants.some(
+        (g) => g.owner_id === args.p_owner && g.recipient_user_id === userId && g.status === 'active'
+      )
+      if (!granted) return Promise.resolve({ data: false, error: null })
+      const row = store.memory_settings.find((s) => s.user_id === args.p_owner)
+      return Promise.resolve({ data: row ? row.memory_ai_enabled !== false : true, error: null })
+    }
     if (name !== 'match_memory_vectors') {
       return Promise.resolve({ data: [], error: null })
     }

@@ -6,6 +6,7 @@ import { useReauth } from '../components/ReauthModal'
 import ReauthModal from '../components/ReauthModal'
 import TypedConfirmModal from '../components/TypedConfirmModal'
 import Logo from '../Logo.jsx'
+import LegacyAskPanel from '../components/LegacyAskPanel.jsx'
 
 /**
  * Legacy access management.
@@ -312,6 +313,8 @@ function LegacyAccess() {
               ))}
             </ul>
           )}
+
+          {openArchive && <LegacyAskPanel key={openArchive} ownerId={openArchive} />}
 
           {openArchive && Array.isArray(archiveMemories) && (
             <div className="archive-view">

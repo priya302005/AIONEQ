@@ -22,7 +22,14 @@ import { asyncHandler } from '../utils/asyncHandler.js'
 import { audit } from '../utils/audit.js'
 import { listActiveGrantsForRecipient } from '../models/legacy.model.js'
 import { retrieveMemories } from '../services/memoryRetrieval.js'
-import { buildContext, splitFollowUps, extractCitedIds, stripAttributionOpener } from '../services/memoryContext.js'
+import {
+  buildContext,
+  splitFollowUps,
+  extractCitedIds,
+  stripAttributionOpener,
+  extractiveAnswer,
+  stripCitationMarkers,
+} from '../services/memoryContext.js'
 import { generateAnswer } from '../services/inferenceService.js'
 import { groundAnswer } from '../services/claimGrounding.js'
 import { providerFailure, compactUserContent } from './query.controller.js'
@@ -79,11 +86,30 @@ export const askLegacyController = asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: 'You do not have legacy access to this archive.' })
   }
 
-  // ---- 2. retrieval over the OWNER's memories, as the recipient ---------
   const client = createClient(config.supabaseUrl, config.supabaseAnonKey, {
     auth: { persistSession: false },
     global: { headers: { Authorization: `Bearer ${req.accessToken}` } },
   })
+
+  // ---- 1b. the OWNER's own "memory AI" switch ---------------------------
+  // The owner's settings row is private to them, so the recipient's token cannot
+  // read it. A security-definer SQL function answers just this one yes/no, and
+  // only for a caller who holds an active grant (see sql/legacy_ask.sql).
+  // Anything other than a clear "true" blocks the ask: unknown means closed.
+  const gate = await client.rpc('legacy_owner_ai_enabled', { p_owner: ownerId })
+  if (gate.error) {
+    audit({ action: 'legacy.ask_owner_setting_failed', userId: req.user.id, ip: req.ip, detail: { ownerId } })
+    return res.status(503).json({ success: false, message: 'Access could not be verified right now. Please try again.' })
+  }
+  if (gate.data !== true) {
+    audit({ action: 'legacy.ask_owner_ai_off', userId: req.user.id, ip: req.ip, detail: { ownerId } })
+    return res.status(403).json({
+      success: false,
+      message: 'This person has turned off AI answers about their memories, so questions cannot be answered right now.',
+    })
+  }
+
+  // ---- 2. retrieval over the OWNER's memories, as the recipient ---------
   let memories
   try {
     memories = await retrieveMemories(client, ownerId, q, { limit: config.queryMaxMemories })
@@ -100,7 +126,15 @@ export const askLegacyController = asyncHandler(async (req, res) => {
   let suggestions = []
 
   // ---- 3. generate + ground ---------------------------------------------
-  if (memories.length) {
+  if (memories.length && compact && config.localAiExtractive) {
+    // Tiny-model mode: quote the matching lines of the owner's memories instead
+    // of letting a model that cannot write answers produce text.
+    const ex = extractiveAnswer(q, memories)
+    if (ex.answer) {
+      answer = ex.answer
+      cited = ex.citedMemoryIds.slice(0, CITATION_MAX)
+    }
+  } else if (memories.length) {
     let raw
     try {
       if (compact) {
@@ -157,7 +191,7 @@ export const askLegacyController = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     ownerId,
-    answer,
+    answer: stripCitationMarkers(answer),
     citedMemories: cited,
     usedMemories: memories.slice(0, CITATION_MAX).map((m) => ({
       memoryId: m.memoryId,

@@ -36,6 +36,7 @@ import {
   stripAttributionOpener,
   streamFailureMessage,
   extractiveAnswer,
+  stripCitationMarkers,
   noContextAnswerShort,
   relayRetrievedMemories,
   formatLinks,
@@ -601,7 +602,7 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
     if (extractive && extracted.answer) {
       released.push(extracted.answer)
       sawDelta = true
-      send('delta', { text: extracted.answer })
+      send('delta', { text: stripCitationMarkers(extracted.answer) })
     }
     for await (const delta of extractive ? [] : answerSource) {
       if (!alive()) break
@@ -697,7 +698,8 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
     )
 
     send('done', {
-      answer: parsed.answer,
+      // Citations travel in citedMemories; the text itself is shown clean.
+      answer: stripCitationMarkers(parsed.answer),
       suggestions: parsed.suggestions,
       citedMemories: citedPayload,
       usedMemories: memories.slice(0, CITATION_MAX).map((m) => ({
