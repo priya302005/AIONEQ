@@ -635,13 +635,23 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
     // Authoritative pass over exactly what was shown, so the client ends up
     // with the same answer, citations and suggestions the non-streaming route
     // would have produced.
-    const final = streamed
-      ? groundAnswer({
-          answer: streamed,
-          memories,
-          honestFallback: relayRetrievedMemories(memories) || noContextAnswer(),
-        })
-      : { answer: noContextAnswer(), citedMemoryIds: [] }
+    //
+    // A tiny model often emits nothing usable (a lone "." or a few stray
+    // words). In compact mode that is a model limit, not "no memory": show the
+    // retrieved excerpts themselves, verbatim, rather than an empty bubble.
+    const words = (streamed.match(/[\p{L}\p{N}]+/gu) || []).length
+    const unusable = compact && words < 3
+    const relayed = relayRetrievedMemories(memories)
+    const final =
+      streamed && !unusable
+        ? groundAnswer({
+            answer: streamed,
+            memories,
+            honestFallback: relayed || noContextAnswer(),
+          })
+        : unusable && relayed
+          ? { answer: relayed, citedMemoryIds: memories.slice(0, 2).map((m) => m.memoryId) }
+          : { answer: noContextAnswer(), citedMemoryIds: [] }
 
     // Broad recall must not produce an answer that cites nothing.
     const answer =
