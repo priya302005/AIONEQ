@@ -85,7 +85,7 @@ function isMissingConversationsTable(msg) {
  * local server that can legitimately be stopped, so the message says so instead
  * of surfacing a stack trace.
  */
-function providerFailure(err) {
+export function providerFailure(err) {
   if (err instanceof ProviderError) {
     if (err.code === 'provider_unreachable') {
       return { status: 503, message: err.message }
@@ -104,7 +104,7 @@ const COMPACT_USER_CHAR_BUDGET = 160
 const COMPACT_SYSTEM =
   'Answer from memory only. If the memory does not cover the question, say exactly: "Your memories don\u2019t mention this."'
 
-function compactUserContent(q, rawContext) {
+export function compactUserContent(q, rawContext) {
   const budget = Math.max(60, COMPACT_USER_CHAR_BUDGET - q.length)
   const trimmed = rawContext.length > budget ? `${rawContext.slice(0, budget).trimEnd()}…` : rawContext
   return `# User's question\n${q}\n\n# Memories\n${trimmed}`
