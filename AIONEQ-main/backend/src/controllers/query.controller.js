@@ -110,6 +110,16 @@ function compactUserContent(q, rawContext) {
   return `# User's question\n${q}\n\n# Memories\n${trimmed}`
 }
 
+/** Context lines for the compact prompt. Shared by the streaming and non-streaming routes. */
+function compactContextLines(memories) {
+  return memories
+    .map((m, i) => {
+      const date = m.eventDate ? new Date(m.eventDate).toISOString().slice(0, 10) : 'unknown date'
+      return `[${i + 1}] id: ${m.memoryId} | ${m.type} | ${date}\n${m.snippet}`
+    })
+    .join('\n\n')
+}
+
 // ------------------------------------------------------------------ ask -----
 
 export const askQuestion = asyncHandler(async (req, res) => {
@@ -185,12 +195,7 @@ export const askQuestion = asyncHandler(async (req, res) => {
     if (!memories.length) {
       answer = "I don't have any memories about that yet."
     } else {
-      const context = memories
-        .map((m, i) => {
-          const date = m.eventDate ? new Date(m.eventDate).toISOString().slice(0, 10) : 'unknown date'
-          return `[${i + 1}] id: ${m.memoryId} | ${m.type} | ${date}\n${m.snippet}`
-        })
-        .join('\n\n')
+      const context = compactContextLines(memories)
 
       let raw
       try {
@@ -530,26 +535,51 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
       memories[0].score < 0.28 &&
       classifyIntent(q).recall
 
-    const system = buildSystemPrompt({
-      hasMemories: true,
-      hasHistory: false,
-      ambiguity: ambiguous,
-      lowConfidence,
-      broadRecall: usedBroadRecall,
-    })
-    const user = buildContext(q, {
-      memories,
-      currentConversation: null,
-      histories: [],
-      links: '',
-    })
+    const compact = config.localAiCompactPrompt
+    // The tiny template-less GPT cannot serve /v1/chat/completions. In compact
+    // mode, mirror askQuestion: trim to the small window and use raw completions.
+    if (compact) memories = memories.slice(0, MAX_RETRIEVED)
+
+    const system = compact
+      ? COMPACT_SYSTEM
+      : buildSystemPrompt({
+          hasMemories: true,
+          hasHistory: false,
+          ambiguity: ambiguous,
+          lowConfidence,
+          broadRecall: usedBroadRecall,
+        })
+    const user = compact
+      ? compactUserContent(q, compactContextLines(memories))
+      : buildContext(q, {
+          memories,
+          currentConversation: null,
+          histories: [],
+          links: '',
+        })
 
     send('status', { phase: 'answering' })
+
+    // Compact mode has no token stream: one completion, fed through the same
+    // sentence grading below as a single chunk.
+    const answerSource = compact
+      ? (async function* () {
+          const out = await generateAnswer({
+            system,
+            user,
+            maxTokens: 32,
+            compact: true,
+            userId: req.user.id,
+            ip: req.ip,
+          })
+          yield out.text
+        })()
+      : chatCompletionStream({ system, user })
 
     const sentences = createSentenceStream()
     const released = []
     let sawDelta = false
-    for await (const delta of chatCompletionStream({ system, user })) {
+    for await (const delta of answerSource) {
       if (!alive()) break
       if (delta) sawDelta = true
       for (const sentence of sentences.push(delta)) {
