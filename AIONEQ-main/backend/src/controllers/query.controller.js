@@ -456,6 +456,20 @@ export const askQuestion = asyncHandler(async (req, res) => {
   })
 })
 
+/** Stream error text: specific for provider faults, generic mapper otherwise. */
+function streamErrorMessage(err) {
+  if (err instanceof ProviderError) {
+    if (err.code === 'provider_http_error') {
+      return `The local model server rejected the request (HTTP ${err.status}). Check the llama-server window for the reason; with a small context (-c 256) the prompt may be too long.`
+    }
+    if (err.code === 'provider_bad_response') return err.message
+    if (err.code === 'provider_unreachable' || err.code === 'provider_timeout') {
+      return streamFailureMessage(err.cause || err)
+    }
+  }
+  return streamFailureMessage(err)
+}
+
 /**
  * Single entry point for memory retrieval in the ask flow.
  * Wraps the RLS-scoped client, applies the caller's type filter, and records a
@@ -681,7 +695,12 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
     // fetch throws ECONNREFUSED before any frame arrives, and reporting only
     // "could not complete" left the user with no idea what to start. Say what
     // actually failed.
-    send('error', { message: streamFailureMessage(err) })
+    //
+    // Provider faults (e.g. an HTTP 400 because the prompt overflowed a small
+    // context window) used to collapse into the generic message too. Say what
+    // happened, without echoing the provider's body, which may contain the prompt.
+    console.error('[ask-stream] failed:', err?.name, err?.code, err?.status, err instanceof ProviderError ? '' : err?.message)
+    send('error', { message: streamErrorMessage(err) })
   } finally {
     if (!res.writableEnded) res.end()
   }
