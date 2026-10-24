@@ -14,7 +14,6 @@ import MemoryDetail from './pages/MemoryDetail.jsx'
 import SecuritySettings from './pages/SecuritySettings.jsx'
 import Profile from './pages/Profile.jsx'
 import LegacyAccess from './pages/LegacyAccess.jsx'
-import LegacyAsk from './pages/LegacyAsk.jsx'
 import RequireAuth from './components/RequireAuth.jsx'
 import { AuthProvider, useAuth } from './auth'
 import { ToastProvider, useToast } from './toast'
@@ -191,10 +190,6 @@ function Shell() {
         <Route
           path="/dashboard/legacy-access"
           element={<RequireAuth><LegacyAccess /></RequireAuth>}
-        />
-        <Route
-          path="/dashboard/legacy-ask"
-          element={<RequireAuth><LegacyAsk /></RequireAuth>}
         />
         <Route
           path="/profile"

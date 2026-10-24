@@ -4,4 +4,4 @@
 
 *.err
 __pycache__/
-*.pyclogs/
+*.pyc
