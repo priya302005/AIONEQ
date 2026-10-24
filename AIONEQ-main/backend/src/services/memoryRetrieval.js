@@ -425,6 +425,8 @@ export async function retrieveMemories(client, userId, question, opts = {}) {
       createdAt: m.created_at,
       updatedAt: m.updated_at,
       snippet,
+      // Full user text (newlines kept) for extractive answering. Never sent to a model.
+      fullText: String(m.content || m.transcript || m.extracted_text || m.ai_summary || m.title || '').slice(0, 4000),
       // True when the excerpt is the AI summary rather than the user's words.
       excerptIsSummary: !(m.content || '').trim() && !(m.transcript || '').trim() && !(m.extracted_text || '').trim() && Boolean(m.ai_summary),
       aiSummary: m.ai_summary || null,

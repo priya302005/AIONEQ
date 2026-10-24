@@ -35,6 +35,7 @@ import {
   noContextAnswer,
   stripAttributionOpener,
   streamFailureMessage,
+  extractiveAnswer,
   noContextAnswerShort,
   relayRetrievedMemories,
   formatLinks,
@@ -593,7 +594,16 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
     const sentences = createSentenceStream()
     const released = []
     let sawDelta = false
-    for await (const delta of answerSource) {
+    // Extractive mode: the tiny model cannot write answers, so quote the
+    // matching lines of the memories instead. No model call, nothing invented.
+    const extractive = compact && config.localAiExtractive
+    const extracted = extractive ? extractiveAnswer(q, memories) : null
+    if (extractive && extracted.answer) {
+      released.push(extracted.answer)
+      sawDelta = true
+      send('delta', { text: extracted.answer })
+    }
+    for await (const delta of extractive ? [] : answerSource) {
       if (!alive()) break
       if (delta) sawDelta = true
       for (const sentence of sentences.push(delta)) {
@@ -612,7 +622,7 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
         send('delta', { text: graded.answer })
       }
     }
-    if (alive()) {
+    if (alive() && !extractive) {
       for (const sentence of sentences.flush()) {
         const graded = groundAnswer({ answer: sentence, memories, honestFallback: '' })
         if (graded.removedClaims.length || !graded.answer.trim()) continue
@@ -643,7 +653,9 @@ export const askQuestionStream = asyncHandler(async (req, res) => {
     const unusable = compact && words < 3
     const relayed = relayRetrievedMemories(memories)
     const final =
-      streamed && !unusable
+      extractive && extracted.answer
+        ? { answer: extracted.answer, citedMemoryIds: extracted.citedMemoryIds }
+        : streamed && !unusable
         ? groundAnswer({
             answer: streamed,
             memories,

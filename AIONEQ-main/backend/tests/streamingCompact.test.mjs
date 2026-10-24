@@ -99,3 +99,30 @@ test('compact: an unusable model reply (a lone ".") falls back to the retrieved 
   assert.match(result.done.answer, /janani/i, 'the memory text should be shown instead of "."')
   assert.equal(result.done.citedMemories.length, 1)
 })
+
+test('extractive: answers by quoting the matching memory lines, with no model call', async () => {
+  config.localAiCompactPrompt = true
+  config.localAiExtractive = true
+  try {
+    seed()
+    store.memories[0].title = 'AIVARIZ placement'
+    store.memories[0].content = [
+      '## Company',
+      '- Industry: IT Services / AI & Consulting',
+      '## Placement Experience',
+      '- Recruited from National Engineering College (2026-27 cycle)',
+      '- Stipend: 7000/month / Salary: 3 LPA (listed students)',
+      '- Contact: aivariz placement cell',
+    ].join('\n')
+
+    const result = await runAskStream({ userId: USER, question: 'salary of aivariz' })
+
+    assert.equal(result.error, null)
+    assert.equal(result.llmCalls, 0, 'extractive mode must not call the model')
+    assert.match(result.done.answer, /Salary: 3 LPA/)
+    assert.ok(!/Industry/.test(result.done.answer), 'unrelated lines must not be shown')
+    assert.equal(result.done.citedMemories.length, 1)
+  } finally {
+    config.localAiExtractive = false
+  }
+})
